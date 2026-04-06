@@ -1,8 +1,8 @@
 [package]
-name = "ida-mcp-rs"
+name = "ida-hive"
 version = "0.1.0"
 edition = "2021"
-description = "Multi-instance IDA MCP server — Rust coordinator + C++ idalib workers"
+description = "Native multi-instance IDA Pro MCP server — Rust coordinator + C++ idalib workers"
 
 [dependencies]
 # MCP protocol

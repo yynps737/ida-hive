@@ -892,7 +892,7 @@ impl ServerHandler for IdaMcpServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             server_info: Implementation {
-                name: "ida-mcp-rs".into(),
+                name: "ida-hive".into(),
                 version: env!("CARGO_PKG_VERSION").into(),
             },
             capabilities: ServerCapabilities::builder().enable_tools().build(),
