@@ -1,0 +1,18 @@
+# Rust
+target/
+
+# C++ build
+worker/build/
+
+# IDE
+.vscode/
+.idea/
+*.user
+
+# Test artifacts
+/tmp/
+*.txt.bak
+
+# OS
+Thumbs.db
+.DS_Store
