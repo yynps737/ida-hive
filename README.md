@@ -1,8 +1,10 @@
 # ida-mcp-rs
 
-Multi-instance IDA MCP Server — Rust coordinator + C++ idalib workers.
+Multi-instance IDA MCP Server for AI-driven binary analysis.
 
-Supports 10-20 simultaneous IDA analysis sessions for AI-driven binary analysis.
+Rust coordinator + C++ idalib workers. 60 MCP tools, up to 100 concurrent analysis sessions, zero external dependencies.
+
+> **Requires IDA Pro 9.2+** with a valid license. This project uses the IDA SDK's `idalib` (IDA-as-a-library) API. You must own a licensed copy of IDA Pro to build and run this tool. No IDA SDK source code or binaries are included in this repository.
 
 ## Architecture
 
