@@ -14,7 +14,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::time::{timeout, Duration};
-use tracing::{info, warn, error};
+use tracing::{info, warn};
 
 use crate::protocol::*;
 
@@ -145,8 +145,19 @@ impl Slot {
         Ok(())
     }
 
-    /// Send a command to the worker and wait for the response
+    /// Send a command to the worker and wait for the response (default 120s timeout)
+    #[allow(dead_code)]
     pub async fn send_command(&self, method: &str, params: serde_json::Value) -> Result<serde_json::Value> {
+        self.send_command_with_timeout(method, params, Duration::from_secs(120)).await
+    }
+
+    /// Send a command with a custom timeout duration
+    pub async fn send_command_with_timeout(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+        timeout_dur: Duration,
+    ) -> Result<serde_json::Value> {
         if self.dead.load(Ordering::SeqCst) {
             return Err(anyhow!("Worker is dead"));
         }
@@ -169,19 +180,19 @@ impl Slot {
             let stdin = self.stdin_tx.lock().await;
             let stdin = stdin.as_ref().ok_or_else(|| anyhow!("Worker not started"))?;
             stdin.send(line).await.map_err(|_| {
-                // Remove from pending since we can't send
                 anyhow!("Worker stdin closed")
             })?;
         }
 
         // Wait for response with timeout
-        match timeout(Duration::from_secs(120), rx).await {
+        let timeout_secs = timeout_dur.as_secs();
+        match timeout(timeout_dur, rx).await {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => Err(anyhow!("Response channel dropped (worker died)")),
             Err(_) => {
                 // Timeout — remove from pending
                 self.pending.lock().await.remove(&id);
-                Err(anyhow!("Worker response timeout (120s)"))
+                Err(anyhow!("Worker response timeout ({}s)", timeout_secs))
             }
         }
     }

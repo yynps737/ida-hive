@@ -122,16 +122,23 @@ void register_core_commands(CommandDispatcher& dispatcher)
 
     // ---- save_idb ----
     // Save current analysis as .i64 database
+    // params: {output_path?: string}  — optional custom save path
     dispatcher.register_command("save_idb", [](const json& params) -> json {
-        // get current database path
-        const char* dbpath = get_path(PATH_TYPE_IDB);
+        std::string outpath;
+        if (params.contains("output_path") && !params["output_path"].is_null())
+        {
+            outpath = params["output_path"].get<std::string>();
+        }
+        else
+        {
+            outpath = get_path(PATH_TYPE_IDB);
+        }
 
-        // save
-        save_database(dbpath, 0, nullptr, nullptr);
+        bool ok = save_database(outpath.c_str(), 0, nullptr, nullptr);
 
         return {
-            {"path", dbpath},
-            {"success", true},
+            {"path", outpath},
+            {"success", ok},
             {"func_count", get_func_qty()},
             {"seg_count", get_segm_qty()},
         };

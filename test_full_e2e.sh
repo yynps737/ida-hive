@@ -2,7 +2,7 @@
 export PATH="/c/Program Files/IDA Professional 9.2:$PATH"
 export IDA_MCP_WORKER_EXE="/c/Users/kikib/Documents/CODEX/idalibcoding/ida-mcp-rs/worker/build/Release/ida_mcp_worker.exe"
 CS2="D:/SteamLibrary/steamapps/common/Counter-Strike Global Offensive/game/bin/win64"
-SERVER="/c/Users/kikib/Documents/CODEX/idalibcoding/ida-mcp-rs/target/x86_64-pc-windows-msvc/release/ida-mcp-rs.exe"
+SERVER="/c/Users/kikib/Documents/CODEX/idalibcoding/ida-mcp-rs/target/x86_64-pc-windows-msvc/release/ida-hive.exe"
 
 send() { echo "$1"; sleep "$2"; }
 
@@ -10,7 +10,9 @@ send() { echo "$1"; sleep "$2"; }
 send '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"full_test","version":"1.0"}}}' 1
 send '{"jsonrpc":"2.0","method":"notifications/initialized"}' 0.5
 
-send '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"open_file","arguments":{"path":"'"$CS2"'/resourcesystem.dll","session":"x"}}}' 4
+send '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"open_file","arguments":{"path":"'"$CS2"'/resourcesystem.dll","session":"x"}}}' 0.5
+send '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"analysis_status","arguments":{"session":"x"}}}' 0.5
+send '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"wait_analysis","arguments":{"session":"x","max_seconds":120}}}' 1
 
 # Core 8
 send '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"get_info","arguments":{"session":"x"}}}' 0.3
@@ -102,7 +104,7 @@ echo "Total MCP responses: $TOTAL"
 
 # Check every expected ID
 MISSING=0
-for id in 0 1 10 11 12 13 14 15 16 17 20 21 22 23 24 25 26 30 31 32 33 40 41 42 43 50 51 52 53 54 55 60 61 62 63 64 65 66 70 71 72 73 74 75 80 81 82 90 91 92 93 94 95 96 97 98 100 101 110 111 112 113; do
+for id in 0 1 2 3 10 11 12 13 14 15 16 17 20 21 22 23 24 25 26 30 31 32 33 40 41 42 43 50 51 52 53 54 55 60 61 62 63 64 65 66 70 71 72 73 74 75 80 81 82 90 91 92 93 94 95 96 97 98 100 101 110 111 112 113; do
     if ! grep -q "\"id\":$id[,}]" /tmp/rust_full_e2e.txt; then
         echo "MISSING: id=$id"
         MISSING=$((MISSING+1))
@@ -110,7 +112,7 @@ for id in 0 1 10 11 12 13 14 15 16 17 20 21 22 23 24 25 26 30 31 32 33 40 41 42 
 done
 
 if [ $MISSING -eq 0 ]; then
-    echo "ALL 60 TOOL RESPONSES RECEIVED"
+    echo "ALL EXPECTED RESPONSES RECEIVED"
 else
     echo "MISSING: $MISSING responses"
 fi

@@ -2,7 +2,7 @@
 
 A native multi-instance IDA Pro MCP server built with Rust and C++.
 
-Each binary you open gets its own dedicated idalib worker process. No session switching, no GIL, no Python runtime. AI models query multiple binaries in parallel through a single MCP endpoint.
+Each binary or database you open gets its own dedicated idalib worker process. No session switching, no GIL, no Python runtime. AI models can query saved `.i64/.idb` databases or raw PE files in parallel through a single MCP endpoint.
 
 > **Requires IDA Pro 9.2+** with a valid license. This project uses the IDA SDK `idalib` API. No SDK source code or binaries are included.
 
@@ -29,7 +29,7 @@ Claude / Codex / any MCP client
 ```
 
 - **Coordinator** (Rust, ~800 LOC): MCP protocol handling, session-to-worker routing, lifecycle management. Built on [rmcp](https://github.com/anthropics/rmcp).
-- **Worker** (C++, ~2000 LOC): Headless idalib process. Loads one `.i64`, responds to JSON commands, calls IDA SDK directly. No Python layer in between.
+- **Worker** (C++, ~2000 LOC): Headless idalib process. Loads one `.i64/.idb` or raw PE file, responds to JSON commands, calls IDA SDK directly. No Python layer in between.
 
 ## Performance
 
@@ -47,11 +47,11 @@ Session switching is essentially free — each binary lives in its own process, 
 
 ## Tools
 
-60 MCP tools across 9 categories:
+64 MCP tools across 9 categories:
 
 | Category | Tools | Count |
 |----------|-------|-------|
-| Management | open_file, list_instances, close_session, server_health, server_warmup | 5 |
+| Management | open_file, list_instances, close_session, analysis_status, wait_analysis, batch_convert, server_health, server_warmup | 8 |
 | Core Query | get_info, list_funcs, func_query, lookup_func, list_segments, list_globals, entity_query, imports, imports_query, int_convert, find_regex, save_idb | 12 |
 | Analysis | decompile, disasm, xrefs_to, xrefs_from, xref_query, xrefs_to_field, callees, func_profile, analyze_function, analyze_batch, export_funcs | 11 |
 | Search | find_bytes, insn_query, basic_blocks, callgraph | 4 |
@@ -111,15 +111,16 @@ Add to your Claude Code global config (`~/.claude.json` under `mcpServers`):
 }
 ```
 
-Restart Claude Code. The 60 tools will appear automatically.
+Restart Claude Code. The 64 tools will appear automatically.
 
 ## Usage
 
 The intended workflow:
 
-1. **You** open a binary in IDA Pro GUI, analyze it, save as `.i64`
-2. **AI** loads the `.i64` via `open_file`, queries it with the 60 tools
-3. Multiple `.i64` files can be open simultaneously in different sessions
+1. **AI** can open either a saved `.i64/.idb` database or a raw PE binary (`.dll`, `.exe`, `.sys`) via `open_file`
+2. For raw binaries, use `analysis_status` to poll or `wait_analysis` to block until auto-analysis is done
+3. Use `batch_convert` when you want to preprocess a set of raw binaries into `.i64`
+4. Multiple sessions can stay open simultaneously for cross-binary work
 
 ```
 You:    "Open C:\analysis\target.dll.i64 and give me an overview"
@@ -131,6 +132,14 @@ You:    "Decompile CreateInterface"
 AI:     → lookup_func(target="CreateInterface", session="s1")
         → decompile(ea="0x180041E00", session="s1")
 
+You:    "Open client.dll directly and wait for analysis"
+AI:     → open_file(path="C:\games\client.dll", session="raw1")
+        → wait_analysis(session="raw1", max_seconds=300)
+        → survey_binary(session="raw1")
+
+You:    "Also batch-convert the whole plugin folder to .i64"
+AI:     → batch_convert(paths=[...], output_dir="C:\analysis\i64", concurrency=4)
+
 You:    "Also open steam_api64.dll.i64 and compare"
 AI:     → open_file(path="...", session="s2")
         Both sessions respond in parallel.
@@ -138,12 +147,13 @@ AI:     → open_file(path="...", session="s2")
 
 ## Testing
 
-244 test cases across C++ worker and Rust MCP protocol, covering:
-- All 56 C++ commands with valid inputs
+244 test cases across C++ worker and Rust MCP protocol, plus release smoke scripts, covering:
+- Worker command coverage for valid inputs
 - 30 boundary/invalid inputs (BADADDR, empty strings, wrong types, malformed JSON)
 - Large binary stress test (97,967 functions)
 - 5-binary concurrent analysis
-- Full MCP protocol round-trip for all 60 tools
+- Full MCP protocol round-trip across the tool surface
+- Raw-binary auto-analysis and batch conversion smoke flows
 - Multi-session isolation and cleanup
 
 Zero crashes, zero unhandled errors.

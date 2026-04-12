@@ -34,13 +34,14 @@ impl IdaMcpServer {
     // Management tools (handled by Rust coordinator)
     // =========================================================================
 
-    /// Open a pre-analyzed .i64 database for AI querying.
-    /// The user should analyze binaries in IDA Pro GUI first and save as .i64.
-    #[tool(description = "Open a .i64 database file for analysis. User should pre-analyze binaries in IDA Pro and save as .i64 first. Returns session info with function/segment counts.")]
+    /// Open a binary for AI querying.
+    /// Supports .i64/.idb (instant) and raw PE files: .dll/.exe/.sys (auto-analysis in background).
+    /// For raw binaries, returns immediately with analyzing=true. Poll with analysis_status or wait with wait_analysis.
+    #[tool(description = "Open a binary for analysis. Supports .i64/.idb databases (instant load) and raw PE files (.dll/.exe/.sys — auto-analysis runs in background). For raw binaries: returns immediately with analyzing=true, then poll analysis_status or call wait_analysis.")]
     async fn open_file(
         &self,
         #[tool(param)]
-        #[schemars(description = "Path to .i64 database file (e.g. C:\\analysis\\target.dll.i64)")]
+        #[schemars(description = "Path to binary file (.i64, .idb, .dll, .exe, .sys)")]
         path: String,
         #[tool(param)]
         #[schemars(description = "Session identifier. Use different sessions for different binaries. Default: 'default'")]
@@ -874,6 +875,85 @@ impl IdaMcpServer {
         }).to_string()
     }
 
+    // =========================================================================
+    // Batch conversion (raw PE → .i64)
+    // =========================================================================
+
+    /// Batch convert raw binaries (DLL/EXE/SYS) to .i64 databases.
+    /// Opens multiple workers in parallel, runs auto-analysis, saves .i64 files.
+    #[tool(description = "Batch convert raw binaries to .i64 databases. Opens workers in parallel, auto-analyzes, saves .i64. Returns per-file results with function counts and elapsed time.")]
+    async fn batch_convert(
+        &self,
+        #[tool(param)]
+        #[schemars(description = "Array of file paths to convert (DLL/EXE/SYS)")]
+        paths: Vec<String>,
+        #[tool(param)]
+        #[schemars(description = "Output directory for .i64 files. If omitted, saves next to original (xxx.dll → xxx.dll.i64)")]
+        output_dir: Option<String>,
+        #[tool(param)]
+        #[schemars(description = "Max parallel workers (default 5, max limited by server max_slots)")]
+        concurrency: Option<i64>,
+        #[tool(param)]
+        #[schemars(description = "Max seconds to wait for each file's analysis (default 600)")]
+        max_analysis_seconds: Option<i64>,
+    ) -> String {
+        let concurrency = concurrency.unwrap_or(5).max(1).min(50) as usize;
+        let max_secs = max_analysis_seconds.unwrap_or(600).max(30).min(3600);
+
+        // Create output directory if specified
+        if let Some(ref dir) = output_dir {
+            let _ = std::fs::create_dir_all(dir);
+        }
+
+        let total = paths.len();
+        let results = self.coordinator.batch_convert(paths, output_dir, concurrency, max_secs).await;
+
+        let completed = results.iter().filter(|r| r.error.is_none()).count();
+        let failed = results.iter().filter(|r| r.error.is_some()).count();
+        let total_funcs: u64 = results.iter().filter_map(|r| r.functions).sum();
+
+        serde_json::json!({
+            "total": total,
+            "completed": completed,
+            "failed": failed,
+            "total_functions": total_funcs,
+            "results": results,
+        }).to_string()
+    }
+
+    // =========================================================================
+    // Analysis lifecycle tools (for raw PE/DLL/EXE loading)
+    // =========================================================================
+
+    /// Check auto-analysis status without blocking.
+    /// Use after open_file on a raw binary to poll analysis progress.
+    #[tool(description = "Check auto-analysis status (non-blocking). Returns whether analysis is done, current queue state, function/segment counts. Use after opening a raw binary (DLL/EXE) to poll progress.")]
+    async fn analysis_status(
+        &self,
+        #[tool(param)]
+        #[schemars(description = "Session identifier")]
+        session: Option<String>,
+    ) -> String {
+        route(&self.coordinator, session, "analysis_status", serde_json::json!({})).await
+    }
+
+    /// Wait for auto-analysis to complete (blocking with timeout).
+    /// Sends periodic progress events. Use when you want to explicitly wait.
+    #[tool(description = "Wait for auto-analysis to complete with timeout. Blocks until analysis finishes or timeout. Returns final status with elapsed time. Sends progress events every 2s.")]
+    async fn wait_analysis(
+        &self,
+        #[tool(param)]
+        #[schemars(description = "Max seconds to wait (default 300, max 600)")]
+        max_seconds: Option<i64>,
+        #[tool(param)]
+        #[schemars(description = "Session identifier")]
+        session: Option<String>,
+    ) -> String {
+        let mut params = serde_json::json!({});
+        if let Some(s) = max_seconds { params["max_seconds"] = s.into(); }
+        route(&self.coordinator, session, "wait_analysis", params).await
+    }
+
     #[tool(description = "Server health check — returns coordinator status and active slot count")]
     async fn server_health(&self) -> String {
         let slots = self.coordinator.list_slots().await;
@@ -897,9 +977,11 @@ impl ServerHandler for IdaMcpServer {
             },
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             instructions: Some(
-                "Multi-instance IDA Pro MCP server. Open .i64 databases with open_file, \
+                "Multi-instance IDA Pro MCP server. Open .i64/.idb databases or raw PE files with open_file, \
                  then use analysis tools (decompile, disasm, xrefs, etc.) to query them. \
-                 Supports multiple simultaneous sessions for different binaries."
+                 Supports multiple simultaneous sessions for different binaries. \
+                 Also supports raw PE files (.dll/.exe/.sys) — auto-analysis runs in background. \
+                 Use analysis_status to poll progress, or wait_analysis to block until done."
                     .into(),
             ),
             ..Default::default()

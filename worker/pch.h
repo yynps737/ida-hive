@@ -19,6 +19,7 @@
 #include <regex>
 #include <set>
 #include <queue>
+#include <chrono>
 #include <nlohmann/json.hpp>
 
 // ---- IDA SDK headers AFTER ----
