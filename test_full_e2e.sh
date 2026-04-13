@@ -1,8 +1,15 @@
 #!/bin/bash
-export PATH="/c/Program Files/IDA Professional 9.2:$PATH"
-export IDA_MCP_WORKER_EXE="/c/Users/kikib/Documents/CODEX/idalibcoding/ida-mcp-rs/worker/build/Release/ida_mcp_worker.exe"
-CS2="D:/SteamLibrary/steamapps/common/Counter-Strike Global Offensive/game/bin/win64"
-SERVER="/c/Users/kikib/Documents/CODEX/idalibcoding/ida-mcp-rs/target/x86_64-pc-windows-msvc/release/ida-hive.exe"
+set -euo pipefail
+
+# Windows-oriented deep E2E sample for a known PE target.
+# For the cross-platform smoke path, use test_smoke.py instead.
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+IDA_HIVE_IDA_PATH="${IDA_HIVE_IDA_PATH:-/c/Program Files/IDA Professional 9.2}"
+export PATH="${IDA_HIVE_IDA_PATH}:$PATH"
+export IDA_MCP_WORKER_EXE="${IDA_MCP_WORKER_EXE:-$ROOT/worker/build/Release/ida_mcp_worker.exe}"
+TARGET_BINARY="${IDA_HIVE_TEST_BINARY:-D:/SteamLibrary/steamapps/common/Counter-Strike Global Offensive/game/bin/win64/resourcesystem.dll}"
+SERVER="${IDA_HIVE_SERVER_EXE:-$ROOT/target/x86_64-pc-windows-msvc/release/ida-hive.exe}"
 
 send() { echo "$1"; sleep "$2"; }
 
@@ -10,7 +17,7 @@ send() { echo "$1"; sleep "$2"; }
 send '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"full_test","version":"1.0"}}}' 1
 send '{"jsonrpc":"2.0","method":"notifications/initialized"}' 0.5
 
-send '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"open_file","arguments":{"path":"'"$CS2"'/resourcesystem.dll","session":"x"}}}' 0.5
+send '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"open_file","arguments":{"path":"'"$TARGET_BINARY"'","session":"x"}}}' 0.5
 send '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"analysis_status","arguments":{"session":"x"}}}' 0.5
 send '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"wait_analysis","arguments":{"session":"x","max_seconds":120}}}' 1
 

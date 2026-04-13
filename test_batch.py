@@ -2,7 +2,7 @@
 """Smoke-test batch_convert via MCP stdio (JSONL framing).
 
 Usage:
-  python test_batch.py --worker path/to/ida_mcp_worker.exe path/to/a.dll path/to/b.dll
+  python test_batch.py /path/to/binary1 /path/to/binary2
 
 Environment overrides:
   IDA_HIVE_SERVER_EXE
@@ -14,15 +14,55 @@ Environment overrides:
 import argparse
 import json
 import os
+import platform
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-DEFAULT_SERVER = ROOT / "target" / "x86_64-pc-windows-msvc" / "release" / "ida-hive.exe"
-DEFAULT_WORKER = ROOT / "worker" / "build" / "Release" / "ida_mcp_worker.exe"
-DEFAULT_OUTPUT = Path(os.environ.get("IDA_HIVE_BATCH_OUTPUT", Path(os.environ.get("TEMP", ".")) / "ida_hive_batch_test"))
+
+
+def pick_existing(candidates):
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+def default_server():
+    system = platform.system()
+    if system == "Windows":
+        return pick_existing([
+            ROOT / "target" / "x86_64-pc-windows-msvc" / "release" / "ida-hive.exe",
+        ])
+    return pick_existing([
+        ROOT / "target" / "release" / "ida-hive",
+    ])
+
+
+def default_worker():
+    system = platform.system()
+    if system == "Windows":
+        return pick_existing([
+            ROOT / "worker" / "build" / "Release" / "ida_mcp_worker.exe",
+            ROOT / "worker" / "build" / "ida_mcp_worker.exe",
+        ])
+    return pick_existing([
+        ROOT / "worker" / "build-linux" / "ida_mcp_worker",
+        ROOT / "worker" / "build" / "ida_mcp_worker",
+    ])
+
+
+DEFAULT_SERVER = default_server()
+DEFAULT_WORKER = default_worker()
+DEFAULT_OUTPUT = Path(
+    os.environ.get(
+        "IDA_HIVE_BATCH_OUTPUT",
+        str(Path(tempfile.gettempdir()) / "ida_hive_batch_test"),
+    )
+)
 
 def send_jsonl(proc, obj):
     """Send a JSON object as one line."""
@@ -39,18 +79,39 @@ def read_jsonl(proc, timeout=300):
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("paths", nargs="+", help="Raw PE files to convert (.dll/.exe/.sys)")
+    parser.add_argument("paths", nargs="+", help="Raw binaries to convert (validated on PE and ELF)")
     parser.add_argument("--server", default=os.environ.get("IDA_HIVE_SERVER_EXE", str(DEFAULT_SERVER)))
     parser.add_argument("--worker", default=os.environ.get("IDA_HIVE_WORKER_EXE", str(DEFAULT_WORKER)))
     parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT))
     parser.add_argument("--concurrency", type=int, default=3)
     parser.add_argument("--timeout", type=int, default=120, help="Per-file analysis timeout in seconds")
-    parser.add_argument("--ida-path", default=os.environ.get("IDA_HIVE_IDA_PATH"), help="IDA install directory to prepend to PATH")
+    parser.add_argument(
+        "--ida-path",
+        default=os.environ.get("IDA_HIVE_IDA_PATH"),
+        help="IDA install directory to prepend to PATH on Windows or LD_LIBRARY_PATH on Linux",
+    )
     return parser.parse_args()
+
+
+def prepend_runtime_path(env, ida_path):
+    if not ida_path:
+        return
+    if platform.system() == "Windows":
+        env["PATH"] = f"{ida_path}{os.pathsep}{env.get('PATH', '')}"
+    else:
+        env["LD_LIBRARY_PATH"] = f"{ida_path}{os.pathsep}{env.get('LD_LIBRARY_PATH', '')}"
 
 
 def main():
     args = parse_args()
+    server_path = Path(args.server)
+    worker_path = Path(args.worker)
+
+    if not server_path.exists():
+        raise SystemExit(f"Server not found: {server_path}")
+    if not worker_path.exists():
+        raise SystemExit(f"Worker not found: {worker_path}")
+
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     for child in output_dir.iterdir():
@@ -64,13 +125,12 @@ def main():
     print()
 
     env = os.environ.copy()
-    env["IDA_MCP_WORKER_EXE"] = args.worker
+    env["IDA_MCP_WORKER_EXE"] = str(worker_path)
     env["IDA_MCP_MAX_SLOTS"] = "10"
-    if args.ida_path:
-        env["PATH"] = f"{args.ida_path}{os.pathsep}{env.get('PATH', '')}"
+    prepend_runtime_path(env, args.ida_path)
 
     proc = subprocess.Popen(
-        [args.server],
+        [str(server_path)],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=sys.stderr,

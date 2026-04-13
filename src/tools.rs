@@ -35,13 +35,13 @@ impl IdaMcpServer {
     // =========================================================================
 
     /// Open a binary for AI querying.
-    /// Supports .i64/.idb (instant) and raw PE files: .dll/.exe/.sys (auto-analysis in background).
+    /// Supports .i64/.idb (instant) and raw binaries that IDA can load directly (auto-analysis in background).
     /// For raw binaries, returns immediately with analyzing=true. Poll with analysis_status or wait with wait_analysis.
-    #[tool(description = "Open a binary for analysis. Supports .i64/.idb databases (instant load) and raw PE files (.dll/.exe/.sys — auto-analysis runs in background). For raw binaries: returns immediately with analyzing=true, then poll analysis_status or call wait_analysis.")]
+    #[tool(description = "Open a binary for analysis. Supports .i64/.idb databases (instant load) and raw binaries that IDA can load directly (validated on PE and ELF). For raw binaries: returns immediately with analyzing=true, then poll analysis_status or call wait_analysis.")]
     async fn open_file(
         &self,
         #[tool(param)]
-        #[schemars(description = "Path to binary file (.i64, .idb, .dll, .exe, .sys)")]
+        #[schemars(description = "Path to a binary file or IDA database (.i64/.idb). Raw binaries are loaded through IDA's native loaders.")]
         path: String,
         #[tool(param)]
         #[schemars(description = "Session identifier. Use different sessions for different binaries. Default: 'default'")]
@@ -876,19 +876,19 @@ impl IdaMcpServer {
     }
 
     // =========================================================================
-    // Batch conversion (raw PE → .i64)
+    // Batch conversion (raw binary → .i64)
     // =========================================================================
 
-    /// Batch convert raw binaries (DLL/EXE/SYS) to .i64 databases.
+    /// Batch convert raw binaries that IDA can load directly to .i64 databases.
     /// Opens multiple workers in parallel, runs auto-analysis, saves .i64 files.
     #[tool(description = "Batch convert raw binaries to .i64 databases. Opens workers in parallel, auto-analyzes, saves .i64. Returns per-file results with function counts and elapsed time.")]
     async fn batch_convert(
         &self,
         #[tool(param)]
-        #[schemars(description = "Array of file paths to convert (DLL/EXE/SYS)")]
+        #[schemars(description = "Array of raw binary paths to convert (validated on PE and ELF)")]
         paths: Vec<String>,
         #[tool(param)]
-        #[schemars(description = "Output directory for .i64 files. If omitted, saves next to original (xxx.dll → xxx.dll.i64)")]
+        #[schemars(description = "Output directory for .i64 files. If omitted, saves next to original (input.bin -> input.bin.i64)")]
         output_dir: Option<String>,
         #[tool(param)]
         #[schemars(description = "Max parallel workers (default 5, max limited by server max_slots)")]
@@ -922,12 +922,12 @@ impl IdaMcpServer {
     }
 
     // =========================================================================
-    // Analysis lifecycle tools (for raw PE/DLL/EXE loading)
+    // Analysis lifecycle tools (for raw binary loading)
     // =========================================================================
 
     /// Check auto-analysis status without blocking.
     /// Use after open_file on a raw binary to poll analysis progress.
-    #[tool(description = "Check auto-analysis status (non-blocking). Returns whether analysis is done, current queue state, function/segment counts. Use after opening a raw binary (DLL/EXE) to poll progress.")]
+    #[tool(description = "Check auto-analysis status (non-blocking). Returns whether analysis is done, current queue state, function/segment counts. Use after opening a raw binary to poll progress.")]
     async fn analysis_status(
         &self,
         #[tool(param)]
@@ -977,10 +977,10 @@ impl ServerHandler for IdaMcpServer {
             },
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             instructions: Some(
-                "Multi-instance IDA Pro MCP server. Open .i64/.idb databases or raw PE files with open_file, \
+                "Multi-instance IDA Pro MCP server. Open .i64/.idb databases or raw binaries with open_file, \
                  then use analysis tools (decompile, disasm, xrefs, etc.) to query them. \
                  Supports multiple simultaneous sessions for different binaries. \
-                 Also supports raw PE files (.dll/.exe/.sys) — auto-analysis runs in background. \
+                 Raw binaries are loaded through IDA's native loaders (validated on PE and ELF) and auto-analysis runs in background. \
                  Use analysis_status to poll progress, or wait_analysis to block until done."
                     .into(),
             ),

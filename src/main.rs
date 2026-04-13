@@ -2,12 +2,12 @@
 //
 // Multi-instance IDA MCP server:
 // - Rust coordinator manages up to 100 C++ idalib worker processes
-// - Each worker loads one .i64/.idb database or raw PE binary in headless mode
+// - Each worker loads one .i64/.idb database or one raw binary in headless mode
 // - MCP tools route requests to the correct worker by session
 //
 // Usage: ida-hive
 // Environment:
-//   IDA_MCP_WORKER_EXE  — path to ida_mcp_worker.exe
+//   IDA_MCP_WORKER_EXE  — path to the ida_mcp_worker executable
 //   IDA_MCP_MAX_SLOTS   — max concurrent workers (default 100)
 
 mod coordinator;
