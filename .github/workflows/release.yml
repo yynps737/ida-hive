@@ -1,0 +1,166 @@
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Git tag to package and attach to a release
+        required: true
+        default: v0.3.0
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  IDA_SDK_TAG: v9.2.0-sdk.1
+  RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build
+
+      - name: Clone IDA SDK
+        run: |
+          git clone --branch "${IDA_SDK_TAG}" --depth 1 https://github.com/HexRaysSA/ida-sdk.git "${RUNNER_TEMP}/ida-sdk"
+          git -C "${RUNNER_TEMP}/ida-sdk" submodule update --init --recursive
+
+      - name: Build Linux worker
+        run: |
+          cmake -S worker -B worker/build-linux -G Ninja -DIDASDK="${RUNNER_TEMP}/ida-sdk"
+          cmake --build worker/build-linux
+
+      - name: Build Linux server
+        run: cargo build --release
+
+      - name: Package Linux release
+        run: |
+          asset_base="ida-hive-${RELEASE_TAG}-linux-x64"
+          pkg_root="${RUNNER_TEMP}/${asset_base}"
+          mkdir -p "${pkg_root}"
+          install -m 0755 target/release/ida-hive "${pkg_root}/ida-hive"
+          install -m 0755 worker/build-linux/ida_mcp_worker "${pkg_root}/ida_mcp_worker"
+          install -m 0644 README.md LICENSE test_smoke.py test_batch.py "${pkg_root}/"
+          cat > "${pkg_root}/ida-hive-linux-wrapper.sh" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          export LD_LIBRARY_PATH="${IDA_HIVE_IDA_PATH:-/opt/ida-pro-9.2}:${LD_LIBRARY_PATH:-}"
+          export IDA_MCP_WORKER_EXE="${IDA_MCP_WORKER_EXE:-$SCRIPT_DIR/ida_mcp_worker}"
+          export IDA_MCP_MAX_SLOTS="${IDA_MCP_MAX_SLOTS:-32}"
+          exec "$SCRIPT_DIR/ida-hive"
+          SH
+          chmod 0755 "${pkg_root}/ida-hive-linux-wrapper.sh"
+          tar -C "${RUNNER_TEMP}" -czf "${RUNNER_TEMP}/${asset_base}.tar.gz" "${asset_base}"
+          sha256sum "${RUNNER_TEMP}/${asset_base}.tar.gz" > "${RUNNER_TEMP}/${asset_base}.sha256"
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-linux
+          path: |
+            ${{ runner.temp }}/ida-hive-${{ env.RELEASE_TAG }}-linux-x64.tar.gz
+            ${{ runner.temp }}/ida-hive-${{ env.RELEASE_TAG }}-linux-x64.sha256
+
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Clone IDA SDK
+        shell: pwsh
+        run: |
+          git clone --branch "$env:IDA_SDK_TAG" --depth 1 https://github.com/HexRaysSA/ida-sdk.git "$env:RUNNER_TEMP\\ida-sdk"
+          git -C "$env:RUNNER_TEMP\\ida-sdk" submodule update --init --recursive
+
+      - name: Build Windows worker
+        shell: pwsh
+        run: |
+          cmake -S worker -B worker/build -DIDASDK="$env:RUNNER_TEMP\\ida-sdk"
+          cmake --build worker/build --config Release
+
+      - name: Build Windows server
+        shell: pwsh
+        run: |
+          cargo build --release --target x86_64-pc-windows-msvc
+
+      - name: Package Windows release
+        shell: pwsh
+        run: |
+          $assetBase = "ida-hive-$env:RELEASE_TAG-windows-x64"
+          $pkgRoot = Join-Path $env:RUNNER_TEMP $assetBase
+          New-Item -ItemType Directory -Force -Path $pkgRoot | Out-Null
+          Copy-Item target/x86_64-pc-windows-msvc/release/ida-hive.exe $pkgRoot
+          Copy-Item worker/build/Release/ida_mcp_worker.exe $pkgRoot
+          Copy-Item README.md, LICENSE, test_smoke.py, test_batch.py $pkgRoot
+          @'
+          @echo off
+          setlocal
+          set "SCRIPT_DIR=%~dp0"
+          if not defined IDA_HIVE_IDA_PATH set "IDA_HIVE_IDA_PATH=C:\Program Files\IDA Professional 9.2"
+          set "PATH=%IDA_HIVE_IDA_PATH%;%PATH%"
+          if not defined IDA_MCP_WORKER_EXE set "IDA_MCP_WORKER_EXE=%SCRIPT_DIR%ida_mcp_worker.exe"
+          if not defined IDA_MCP_MAX_SLOTS set "IDA_MCP_MAX_SLOTS=32"
+          "%SCRIPT_DIR%ida-hive.exe"
+          '@ | Set-Content -Path (Join-Path $pkgRoot 'ida-hive-windows-wrapper.bat') -NoNewline
+          Compress-Archive -Path $pkgRoot -DestinationPath (Join-Path $env:RUNNER_TEMP "$assetBase.zip") -Force
+          $hash = (Get-FileHash -Algorithm SHA256 (Join-Path $env:RUNNER_TEMP "$assetBase.zip")).Hash.ToLower()
+          "$hash  $assetBase.zip" | Set-Content -Path (Join-Path $env:RUNNER_TEMP "$assetBase.sha256") -NoNewline
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows
+          path: |
+            ${{ runner.temp }}/ida-hive-${{ env.RELEASE_TAG }}-windows-x64.zip
+            ${{ runner.temp }}/ida-hive-${{ env.RELEASE_TAG }}-windows-x64.sha256
+
+  release:
+    runs-on: ubuntu-latest
+    needs:
+      - build-linux
+      - build-windows
+
+    steps:
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${RELEASE_TAG}"
+          if ! gh release view "${tag}" >/dev/null 2>&1; then
+            gh release create "${tag}" --draft --title "${tag}" --generate-notes
+          fi
+          gh release upload "${tag}" dist/* --clobber
