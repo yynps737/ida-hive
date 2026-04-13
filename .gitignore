@@ -3,6 +3,7 @@ target/
 
 # C++ build
 worker/build/
+worker/build-*/
 
 # IDE
 .vscode/

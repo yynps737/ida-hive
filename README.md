@@ -2,9 +2,15 @@
 
 A native multi-instance IDA Pro MCP server built with Rust and C++.
 
-Each binary or database you open gets its own dedicated idalib worker process. No session switching, no GIL, no Python runtime. AI models can query saved `.i64/.idb` databases or raw PE files in parallel through a single MCP endpoint.
+Each binary or database you open gets its own dedicated idalib worker process. No session switching, no GIL, no Python runtime. AI models can query saved `.i64/.idb` databases or raw binaries that IDA can load directly through a single MCP endpoint.
 
 > **Requires IDA Pro 9.2+** with a valid license. This project uses the IDA SDK `idalib` API. No SDK source code or binaries are included.
+
+## Platform Status
+
+- **Windows**: release assets and original performance measurements are Windows-first.
+- **Linux**: validated from source on Debian 13 with IDA Pro 9.2 and public `HexRaysSA/ida-sdk` tag `v9.2.0-sdk.1`.
+- **Single codebase**: the goal is one MCP contract and one tool surface across both platforms. Users should only need the platform-specific build artifacts.
 
 ## Why
 
@@ -29,7 +35,7 @@ Claude / Codex / any MCP client
 ```
 
 - **Coordinator** (Rust, ~800 LOC): MCP protocol handling, session-to-worker routing, lifecycle management. Built on [rmcp](https://github.com/anthropics/rmcp).
-- **Worker** (C++, ~2000 LOC): Headless idalib process. Loads one `.i64/.idb` or raw PE file, responds to JSON commands, calls IDA SDK directly. No Python layer in between.
+- **Worker** (C++, ~2000 LOC): Headless idalib process. Loads one `.i64/.idb` or raw binary, responds to JSON commands, calls IDA SDK directly. No Python layer in between.
 
 ## Performance
 
@@ -68,56 +74,93 @@ Not included by design: debugger tools (use x64dbg/WinDbg) and Python eval (no P
 ### Prerequisites
 
 - IDA Pro 9.2+ installed and activated
-- IDA SDK 9.2 (set `IDASDK` environment variable)
-- CMake 3.27+, MSVC 2022+ (Windows)
+- IDA SDK 9.2 compatible tree exposed through `IDASDK`
+- CMake 3.27+
 - Rust toolchain (`rustup`)
+- GCC/Clang on Linux, or MSVC 2022+ on Windows
 
-### C++ Worker
+### SDK Setup
+
+Tested SDK source:
 
 ```bash
-cd worker
-set IDASDK=C:\path\to\ida-sdk
-cmake -B build
-cmake --build build --config Release
+git clone --branch v9.2.0-sdk.1 --depth 1 https://github.com/HexRaysSA/ida-sdk.git /path/to/ida-sdk
+git -C /path/to/ida-sdk submodule update --init --recursive
 ```
 
-### Rust Coordinator
+### Windows Build
 
 ```bash
+set IDASDK=C:\path\to\ida-sdk
+cmake -S worker -B worker/build
+cmake --build worker/build --config Release
 cargo build --release --target x86_64-pc-windows-msvc
 ```
 
-Two files are the entire deployment:
+Artifacts:
 
+```text
+target/x86_64-pc-windows-msvc/release/ida-hive.exe
+worker/build/Release/ida_mcp_worker.exe
 ```
-target/.../release/ida-hive.exe       ~2 MB
-worker/build/Release/ida_mcp_worker.exe  ~420 KB
+
+### Linux Build
+
+```bash
+export IDASDK=/path/to/ida-sdk
+cmake -S worker -B worker/build-linux
+cmake --build worker/build-linux -j"$(nproc)"
+cargo build --release
+```
+
+Artifacts:
+
+```text
+target/release/ida-hive
+worker/build-linux/ida_mcp_worker
 ```
 
 ## Setup
 
-Add to your Claude Code global config (`~/.claude.json` under `mcpServers`):
+The most reliable setup is to launch `ida-hive` through a tiny wrapper that injects the platform-specific runtime environment.
+
+### Windows Wrapper
+
+```bat
+@echo off
+set "PATH=C:\Program Files\IDA Professional 9.2;%PATH%"
+set "IDA_MCP_WORKER_EXE=C:\path\to\ida_mcp_worker.exe"
+set "IDA_MCP_MAX_SLOTS=100"
+C:\path\to\ida-hive.exe
+```
+
+### Linux Wrapper
+
+```bash
+#!/usr/bin/env bash
+export LD_LIBRARY_PATH="/opt/ida-pro-9.2:${LD_LIBRARY_PATH:-}"
+export IDA_MCP_WORKER_EXE="/path/to/ida_mcp_worker"
+export IDA_MCP_MAX_SLOTS=100
+exec /path/to/ida-hive
+```
+
+Then point your MCP client at the wrapper script:
 
 ```json
 "ida-hive": {
   "type": "stdio",
-  "command": "C:/path/to/ida-hive.exe",
-  "args": [],
-  "env": {
-    "IDA_MCP_WORKER_EXE": "C:/path/to/ida_mcp_worker.exe",
-    "IDA_MCP_MAX_SLOTS": "100",
-    "PATH": "C:\\Program Files\\IDA Professional 9.2;%PATH%"
-  }
+  "command": "/path/to/ida-hive-wrapper",
+  "args": []
 }
 ```
 
-Restart Claude Code. The 64 tools will appear automatically.
+Restart your MCP client. The 64 tools will appear automatically.
 
 ## Usage
 
 The intended workflow:
 
-1. **AI** can open either a saved `.i64/.idb` database or a raw PE binary (`.dll`, `.exe`, `.sys`) via `open_file`
+1. **AI** can open either a saved `.i64/.idb` database or a raw binary that IDA can load directly via `open_file`
 2. For raw binaries, use `analysis_status` to poll or `wait_analysis` to block until auto-analysis is done
 3. Use `batch_convert` when you want to preprocess a set of raw binaries into `.i64`
 4. Multiple sessions can stay open simultaneously for cross-binary work
@@ -145,6 +188,11 @@ AI:     → open_file(path="...", session="s2")
         Both sessions respond in parallel.
 ```
 
+Validated raw-binary paths so far:
+
+- Windows PE inputs (`.dll`, `.exe`, `.sys`) from the original project workflow
+- Linux ELF inputs such as `/bin/true`
+
 ## Testing
 
 244 test cases across C++ worker and Rust MCP protocol, plus release smoke scripts, covering:
@@ -157,6 +205,19 @@ AI:     → open_file(path="...", session="s2")
 - Multi-session isolation and cleanup
 
 Zero crashes, zero unhandled errors.
+
+Recommended local smoke tests:
+
+```bash
+python test_smoke.py /path/to/binary
+python test_batch.py /path/to/binary1 /path/to/binary2
+```
+
+Notes:
+
+- `test_smoke.py` is the cross-platform MCP smoke path.
+- `test_batch.py` exercises `batch_convert` end-to-end.
+- `test_full_e2e.sh` remains a Windows-oriented deep sample for a known PE target.
 
 ## License
 

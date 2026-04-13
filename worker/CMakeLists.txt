@@ -2,8 +2,33 @@ cmake_minimum_required(VERSION 3.27)
 project(ida_mcp_worker VERSION 0.1.0)
 set(CMAKE_CXX_STANDARD 17)
 
-# Include IDA SDK bootstrap
-include($ENV{IDASDK}/src/cmake/bootstrap.cmake)
+# Accept either a CMake cache entry or the environment variable for IDASDK.
+if(DEFINED IDASDK AND NOT DEFINED ENV{IDASDK})
+    set(ENV{IDASDK} "${IDASDK}")
+elseif(NOT DEFINED IDASDK AND DEFINED ENV{IDASDK})
+    set(IDASDK "$ENV{IDASDK}")
+endif()
+
+if(NOT DEFINED IDASDK AND NOT DEFINED ENV{IDASDK})
+    message(FATAL_ERROR "IDASDK must point to the IDA SDK root (repo root or src/).")
+endif()
+
+set(_ida_sdk_bootstrap_root "$ENV{IDASDK}")
+if(NOT _ida_sdk_bootstrap_root AND DEFINED IDASDK)
+    set(_ida_sdk_bootstrap_root "${IDASDK}")
+endif()
+
+if(EXISTS "${_ida_sdk_bootstrap_root}/src/cmake/bootstrap.cmake")
+    include("${_ida_sdk_bootstrap_root}/src/cmake/bootstrap.cmake")
+elseif(EXISTS "${_ida_sdk_bootstrap_root}/cmake/bootstrap.cmake")
+    include("${_ida_sdk_bootstrap_root}/cmake/bootstrap.cmake")
+else()
+    message(FATAL_ERROR "Could not locate ida-cmake bootstrap under: ${_ida_sdk_bootstrap_root}")
+endif()
+
+# bootstrap normalizes the public GitHub SDK layout to .../src. Mirror that
+# back into the cache so re-configures keep using the canonical tree.
+set(IDASDK "$ENV{IDASDK}" CACHE PATH "Path to the IDA SDK root" FORCE)
 find_package(idasdk REQUIRED)
 
 # Worker executable — idalib headless
