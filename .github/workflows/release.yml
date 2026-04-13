@@ -160,7 +160,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag="${RELEASE_TAG}"
-          if ! gh release view "${tag}" >/dev/null 2>&1; then
-            gh release create "${tag}" --draft --title "${tag}" --generate-notes
+          repo="${GITHUB_REPOSITORY}"
+          if ! gh release view "${tag}" -R "${repo}" >/dev/null 2>&1; then
+            gh release create "${tag}" -R "${repo}" --draft --title "${tag}" --generate-notes
           fi
-          gh release upload "${tag}" dist/* --clobber
+          gh release upload "${tag}" -R "${repo}" dist/* --clobber
