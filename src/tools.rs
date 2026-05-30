@@ -146,9 +146,9 @@ impl IdaMcpServer {
         #[schemars(description = "Session identifier")]
         session: Option<String>,
     ) -> String {
-        // Public schema uses `ea` for consistency with every other address-taking tool,
-        // but the worker contract still expects the param key `target`.
-        route(&self.coordinator, session, "lookup_func", serde_json::json!({"target": ea})).await
+        // Public schema uses `ea` for consistency with every other address-taking
+        // tool; the worker accepts both `ea` and the legacy `target` key.
+        route(&self.coordinator, session, "lookup_func", serde_json::json!({"ea": ea})).await
     }
 
     /// Save the current IDB database.

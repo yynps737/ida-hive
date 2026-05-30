@@ -96,7 +96,12 @@ void register_core_commands(CommandDispatcher& dispatcher)
     // ---- lookup_func ----
     // params: {target: string}  — address or name
     dispatcher.register_command("lookup_func", [](const json& params) -> json {
-        std::string target = params.at("target").get<std::string>();
+        // Accept either "ea" (current schema) or "target" (legacy callers).
+        std::string target;
+        if (params.contains("ea") && !params["ea"].is_null())
+            target = params["ea"].get<std::string>();
+        else
+            target = params.at("target").get<std::string>();
 
         // Numeric address first, then the shared name resolver (handles primary
         // names, demangled/short names, entry exports, and glibc-decorated

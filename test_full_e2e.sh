@@ -25,7 +25,7 @@ send '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"wait_analy
 send '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"get_info","arguments":{"session":"x"}}}' 0.3
 send '{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"list_funcs","arguments":{"session":"x","limit":2}}}' 0.3
 send '{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"list_segments","arguments":{"session":"x"}}}' 0.3
-send '{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"lookup_func","arguments":{"target":"DllEntryPoint","session":"x"}}}' 0.3
+send '{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"lookup_func","arguments":{"ea":"DllEntryPoint","session":"x"}}}' 0.3
 send '{"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"save_idb","arguments":{"session":"x"}}}' 1
 send '{"jsonrpc":"2.0","id":15,"method":"tools/call","params":{"name":"list_globals","arguments":{"session":"x","limit":2}}}' 0.3
 send '{"jsonrpc":"2.0","id":16,"method":"tools/call","params":{"name":"func_query","arguments":{"session":"x","min_size":2000,"limit":2}}}' 0.3

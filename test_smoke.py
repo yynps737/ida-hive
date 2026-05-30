@@ -197,7 +197,7 @@ def main():
         first_ea = first_func["ea"]
 
         lookup = parse_tool_text(
-            call_tool(proc, 6, "lookup_func", {"session": args.session, "target": first_ea})
+            call_tool(proc, 6, "lookup_func", {"session": args.session, "ea": first_ea})
         )
         disasm = parse_tool_text(
             call_tool(proc, 7, "disasm", {"session": args.session, "ea": first_ea, "count": 5})
