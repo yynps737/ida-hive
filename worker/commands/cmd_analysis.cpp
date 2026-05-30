@@ -67,7 +67,7 @@ void register_analysis_commands(CommandDispatcher& dispatcher)
         size_t count = params.value("count", 50);
 
         func_t* f = get_func(ea);
-        ea_t start = f ? f->start_ea : ea;
+        ea_t start = ea;
         ea_t end   = f ? f->end_ea   : BADADDR;
 
         json lines = json::array();
@@ -154,6 +154,7 @@ void register_analysis_commands(CommandDispatcher& dispatcher)
             throw std::runtime_error("No function at given address");
 
         json callees = json::array();
+        std::set<ea_t> seen;
         ea_t curr = f->start_ea;
         while (curr < f->end_ea && curr != BADADDR)
         {
@@ -161,8 +162,11 @@ void register_analysis_commands(CommandDispatcher& dispatcher)
             for (bool ok = xb.first_from(curr, XREF_FAR); ok; ok = xb.next_from())
             {
                 if (!xb.iscode) continue;
+                if (xb.type != fl_CN && xb.type != fl_CF) continue;
                 func_t* target = get_func(xb.to);
                 if (!target) continue;
+                if (target->start_ea == f->start_ea) continue;
+                if (!seen.insert(target->start_ea).second) continue;
 
                 qstring callee_name;
                 get_func_name(&callee_name, target->start_ea);
@@ -208,13 +212,13 @@ void register_analysis_commands(CommandDispatcher& dispatcher)
 
         if (direction == "from" || direction == "both")
         {
+            qstring fname;
+            func_t* ff = get_func(ea);
+            if (ff) get_func_name(&fname, ff->start_ea);
             xrefblk_t xb;
             for (bool ok = xb.first_from(ea, XREF_ALL); ok && refs.size() < limit; ok = xb.next_from())
             {
                 if (code_only && !xb.iscode) continue;
-                qstring fname;
-                func_t* ff = get_func(xb.to);
-                if (ff) get_func_name(&fname, ff->start_ea);
                 refs.push_back({
                     {"from", ea_hex(ea)}, {"to", ea_hex(xb.to)},
                     {"direction", "from"}, {"type", xb.iscode ? "code" : "data"},

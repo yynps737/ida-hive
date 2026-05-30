@@ -109,6 +109,7 @@ void register_graph_commands(CommandDispatcher& dispatcher)
             if (depth >= max_depth) continue;
 
             // Find callees
+            std::set<ea_t> seen;
             ea_t curr = f->start_ea;
             while (curr < f->end_ea && curr != BADADDR)
             {
@@ -116,8 +117,11 @@ void register_graph_commands(CommandDispatcher& dispatcher)
                 for (bool ok = xb.first_from(curr, XREF_FAR); ok; ok = xb.next_from())
                 {
                     if (!xb.iscode) continue;
+                    if (xb.type != fl_CN && xb.type != fl_CF) continue;
                     func_t* callee = get_func(xb.to);
                     if (!callee) continue;
+                    if (callee->start_ea == f->start_ea) continue;
+                    if (!seen.insert(callee->start_ea).second) continue;
 
                     edges.push_back({
                         {"from", ea_hex(f->start_ea)},
@@ -222,10 +226,11 @@ void register_graph_commands(CommandDispatcher& dispatcher)
             {
                 if (xb2.iscode)
                 {
+                    if (xb2.type != fl_CN && xb2.type != fl_CF) continue;
                     func_t* callee = get_func(xb2.to);
-                    if (callee && !seen_callees.count(callee->start_ea))
+                    if (callee && callee->start_ea != f->start_ea
+                        && seen_callees.insert(callee->start_ea).second)
                     {
-                        seen_callees.insert(callee->start_ea);
                         qstring cname;
                         get_func_name(&cname, callee->start_ea);
                         callees.push_back({{"ea", ea_hex(callee->start_ea)}, {"name", cname.c_str()}});

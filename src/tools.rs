@@ -137,13 +137,15 @@ impl IdaMcpServer {
     async fn lookup_func(
         &self,
         #[tool(param)]
-        #[schemars(description = "Address (hex) or function name to look up")]
-        target: String,
+        #[schemars(description = "Function address in hex (e.g. '0x1400010A0') or function name to look up")]
+        ea: String,
         #[tool(param)]
         #[schemars(description = "Session identifier")]
         session: Option<String>,
     ) -> String {
-        route(&self.coordinator, session, "lookup_func", serde_json::json!({"target": target})).await
+        // Public schema uses `ea` for consistency with every other address-taking tool,
+        // but the worker contract still expects the param key `target`.
+        route(&self.coordinator, session, "lookup_func", serde_json::json!({"target": ea})).await
     }
 
     /// Save the current IDB database.
@@ -423,7 +425,38 @@ impl IdaMcpServer {
         &self,
         #[tool(param)] #[schemars(description = "Number value (hex 0x..., decimal, or octal 0...)")] value: String,
     ) -> String {
-        route(&self.coordinator, None, "int_convert", serde_json::json!({"value": value})).await
+        // Pure number-conversion utility: compute directly in Rust, no worker/session needed.
+        // Matches the worker's int_convert output shape (cmd_search.cpp:209-236):
+        // base-0 radix detection (0x.. hex, 0.. octal, else decimal) into a u64.
+        let s = value.trim();
+        let parsed: Option<u64> = if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+            u64::from_str_radix(hex, 16).ok()
+        } else if s.len() > 1 && s.starts_with('0') && s[1..].bytes().all(|b| (b'0'..=b'7').contains(&b)) {
+            u64::from_str_radix(&s[1..], 8).ok()
+        } else {
+            // Decimal: accept unsigned, or negative values via i64 reinterpreted to bits.
+            s.parse::<u64>().ok().or_else(|| s.parse::<i64>().ok().map(|v| v as u64))
+        };
+
+        let val = match parsed {
+            Some(v) => v,
+            None => return serde_json::json!({"error": format!("could not parse '{}' as a number", value)}).to_string(),
+        };
+
+        // Binary: "0b" + bits with no leading zeros ("0b0" for zero).
+        let bin = if val == 0 {
+            "0b0".to_string()
+        } else {
+            format!("0b{:b}", val)
+        };
+
+        serde_json::json!({
+            "hex": format!("0x{:X}", val),
+            "dec": format!("{}", val),
+            "oct": format!("0{:o}", val),
+            "bin": bin,
+            "signed": val as i64,
+        }).to_string()
     }
 
     // =========================================================================

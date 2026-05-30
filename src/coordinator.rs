@@ -205,7 +205,15 @@ impl Coordinator {
 
         for slot in slots.iter() {
             let alive = slot.is_alive().await;
-            let ready = slot.ready_data.lock().await.clone();
+            // `ready_data` is the worker's open-time snapshot; it is never
+            // refreshed here (querying the worker would make list_slots block
+            // and risk deadlock). Its `analyzing` flag therefore goes stale —
+            // it stays `true` forever even after auto-analysis finishes. Drop
+            // that untrustworthy field while keeping the rest of the snapshot.
+            let mut ready = slot.ready_data.lock().await.clone();
+            if let Some(serde_json::Value::Object(map)) = ready.as_mut() {
+                map.remove("analyzing");
+            }
             infos.push(SlotInfo {
                 id: slot.id.clone(),
                 path: slot.path.clone(),

@@ -96,36 +96,73 @@ void register_stack_commands(CommandDispatcher& dispatcher)
             throw std::runtime_error("Variable not found: " + old_name);
 
         bool renamed = false, retyped = false;
+        bool want_rename = !new_name.empty();
+        bool want_retype = !type_str.empty();
+        std::string error;
 
         // Rename
-        if (!new_name.empty())
+        if (want_rename)
         {
             renamed = rename_lvar(f->start_ea, old_name.c_str(), new_name.c_str());
+            if (!renamed)
+                error = "rename_lvar failed";
         }
 
         // Retype
-        if (!type_str.empty())
+        if (want_retype)
         {
+            // The current name of the variable (after a possible rename above).
+            const char* cur_name = (want_rename && renamed)
+                                 ? new_name.c_str()
+                                 : old_name.c_str();
+
             tinfo_t tif;
-            if (parse_decl(&tif, nullptr, nullptr, type_str.c_str(), PT_SIL))
+            if (!parse_decl(&tif, nullptr, nullptr, type_str.c_str(), PT_SIL))
             {
+                if (error.empty())
+                    error = "type parse failed";
+            }
+            else
+            {
+                // Build the locator the same way the SDK's rename_lvar helper
+                // does: locate_lvar() yields the exact lvar_locator_t that
+                // modify_user_lvar_info() matches against in the persistence
+                // layer. Using the raw decompiled lvar_t::location/defea here
+                // is unreliable and is why the retype previously always failed.
                 lvar_saved_info_t lsi;
-                lsi.ll.location = target->location;
-                lsi.ll.defea = target->defea;
-                lsi.type = tif;
-                lsi.name = new_name.empty() ? old_name.c_str() : new_name.c_str();
-                lsi.size = tif.get_size();
-                retyped = modify_user_lvar_info(f->start_ea, MLI_TYPE, lsi);
+                if (!locate_lvar(&lsi.ll, f->start_ea, cur_name))
+                {
+                    if (error.empty())
+                        error = "locate_lvar failed";
+                }
+                else
+                {
+                    lsi.name = cur_name;
+                    lsi.type = tif;
+                    lsi.size = tif.get_size();
+                    // Apply name+type together so the stored entry stays
+                    // consistent with the (possibly renamed) variable.
+                    retyped = modify_user_lvar_info(
+                        f->start_ea, MLI_NAME | MLI_TYPE, lsi);
+                    if (!retyped && error.empty())
+                        error = "modify_user_lvar_info failed";
+                }
             }
         }
 
-        return {
+        // 'success' must reflect whether every REQUESTED operation applied.
+        bool success = (!want_rename || renamed) && (!want_retype || retyped);
+
+        json result = {
             {"ea", ea_hex(f->start_ea)},
             {"old_name", old_name},
             {"renamed", renamed},
             {"retyped", retyped},
-            {"success", renamed || retyped},
+            {"success", success},
         };
+        if (!success && !error.empty())
+            result["error"] = error;
+        return result;
     });
 
     // ---- delete_stack ----

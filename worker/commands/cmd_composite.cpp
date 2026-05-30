@@ -83,9 +83,10 @@ void register_composite_commands(CommandDispatcher& dispatcher)
                 if (xb2.iscode)
                 {
                     func_t* callee = get_func(xb2.to);
-                    if (callee && !seen.count(callee->start_ea))
+                    if ((xb2.type == fl_CN || xb2.type == fl_CF)
+                        && callee && callee->start_ea != f->start_ea
+                        && seen.insert(callee->start_ea).second)
                     {
-                        seen.insert(callee->start_ea);
                         qstring n;
                         get_func_name(&n, callee->start_ea);
                         callees.push_back({{"ea", ea_hex(callee->start_ea)}, {"name", n.c_str()}});
@@ -324,9 +325,10 @@ void register_composite_commands(CommandDispatcher& dispatcher)
                 for (bool ok = xb2.first_from(curr, XREF_FAR); ok; ok = xb2.next_from())
                 {
                     if (!xb2.iscode) continue;
+                    if (xb2.type != fl_CN && xb2.type != fl_CF) continue;
                     func_t* callee = get_func(xb2.to);
-                    if (!callee || seen_callees.count(callee->start_ea)) continue;
-                    seen_callees.insert(callee->start_ea);
+                    if (!callee || callee->start_ea == f->start_ea) continue;
+                    if (!seen_callees.insert(callee->start_ea).second) continue;
 
                     qstring cname;
                     get_func_name(&cname, callee->start_ea);
@@ -418,6 +420,9 @@ void register_composite_commands(CommandDispatcher& dispatcher)
         {
             throw std::runtime_error("Unknown action: " + action);
         }
+
+        // Invalidate the cached decompilation so the AFTER pass reflects the edit
+        mark_cfunc_dirty(f->start_ea);
 
         // Decompile AFTER
         std::string after = decompile_to_string(f);

@@ -21,8 +21,15 @@ void register_type_commands(CommandDispatcher& dispatcher)
         ea_t ea = parse_ea(params.at("ea"));
         std::string type_str = params.at("type").get<std::string>();
 
+        // apply_cdecl requires a trailing ';'. The tool doc example omits it,
+        // so append one if (ignoring trailing whitespace) it is missing.
+        std::string cdecl_str = type_str;
+        size_t last = cdecl_str.find_last_not_of(" \t\r\n");
+        if (last == std::string::npos || cdecl_str[last] != ';')
+            cdecl_str += ';';
+
         // Try apply_cdecl first (handles "int __fastcall func(int a1, int a2)")
-        bool ok = apply_cdecl(nullptr, ea, type_str.c_str());
+        bool ok = apply_cdecl(nullptr, ea, cdecl_str.c_str());
 
         if (!ok)
         {
@@ -70,9 +77,14 @@ void register_type_commands(CommandDispatcher& dispatcher)
         qstring type_str;
         tif.print(&type_str);
 
+        // get_size() returns BADSIZE for function types (and on error);
+        // report null instead of the 0xFFFF... sentinel.
+        asize_t tsize = tif.get_size();
+        json size_val = (tif.is_func() || tsize == BADSIZE) ? json(nullptr) : json((size_t)tsize);
+
         return {
             {"type",   type_str.c_str()},
-            {"size",   (size_t)tif.get_size()},
+            {"size",   size_val},
             {"is_ptr", tif.is_ptr()},
             {"is_func", tif.is_func()},
             {"is_struct", tif.is_struct()},
@@ -87,11 +99,13 @@ void register_type_commands(CommandDispatcher& dispatcher)
     dispatcher.register_command("declare_type", [](const json& params) -> json {
         std::string decl = params.at("decl").get<std::string>();
 
+        // parse_decls returns the number of errors (negative on hard failure),
+        // NOT the number of parsed types.
         int count = parse_decls(nullptr, decl.c_str(), nullptr, HTI_DCL);
         if (count < 0)
             throw std::runtime_error("Failed to parse declaration");
 
-        return {{"parsed", count}, {"success", true}};
+        return {{"errors", count}, {"parsed", count == 0}, {"success", true}};
     });
 
     // ---- type_query ----

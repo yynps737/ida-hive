@@ -7,8 +7,10 @@
 
 #include <ida.hpp>
 #include <pro.h>
+#include <name.hpp>
 
 #include <string>
+#include <stdexcept>
 #include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
@@ -51,7 +53,17 @@ inline ea_t parse_ea(const json& val)
     if (val.is_string())
     {
         std::string s = val.get<std::string>();
-        return (ea_t)std::stoull(s, nullptr, 0);
+        try
+        {
+            return (ea_t)std::stoull(s, nullptr, 0);
+        }
+        catch (...)
+        {
+            ea_t e = get_name_ea(BADADDR, s.c_str());
+            if (e == BADADDR)
+                throw std::runtime_error("Could not resolve '" + s + "' as an address or name");
+            return e;
+        }
     }
     return (ea_t)val.get<uint64_t>();
 }

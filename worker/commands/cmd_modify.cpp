@@ -60,12 +60,12 @@ void register_modify_commands(CommandDispatcher& dispatcher)
         get_cmt(&existing, ea, repeatable);
 
         std::string merged = existing.c_str();
-        if (!merged.empty() && merged.back() != '\n')
-            merged += "\n";
+        if (!merged.empty())
+            merged += " | ";
         merged += text;
 
-        set_cmt(ea, merged.c_str(), repeatable);
-        return {{"ea", ea_hex(ea)}, {"success", true}};
+        bool ok = set_cmt(ea, merged.c_str(), repeatable);
+        return {{"ea", ea_hex(ea)}, {"success", ok}};
     });
 
     // ---- define_func ----
@@ -124,6 +124,8 @@ void register_modify_commands(CommandDispatcher& dispatcher)
     dispatcher.register_command("undefine", [](const json& params) -> json {
         ea_t ea = parse_ea(params.at("ea"));
         asize_t size = params.value("size", 1);
+        if (size == 0)
+            size = get_item_size(ea);
 
         del_items(ea, DELIT_SIMPLE, size);
         return {{"ea", ea_hex(ea)}, {"size", size}, {"success", true}};

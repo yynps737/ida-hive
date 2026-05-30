@@ -104,6 +104,43 @@ void register_core_commands(CommandDispatcher& dispatcher)
         if (ea == BADADDR || !get_func(ea))
             ea = get_name_ea(BADADDR, target.c_str());
 
+        // get_name_ea only matches the primary/registered name, so exports and
+        // aliases (e.g. "malloc" whose primary name is "__libc_malloc", or
+        // "getc" -> "_IO_getc") don't resolve. Fall back to the entry-point
+        // table (which records export names by ordinal) and to a demangled-name
+        // match before giving up.
+        if (ea == BADADDR)
+        {
+            size_t nentries = get_entry_qty();
+            for (size_t i = 0; i < nentries; i++)
+            {
+                uval_t ord = get_entry_ordinal(i);
+                qstring ename;
+                if (get_entry_name(&ename, ord) > 0 && ename == target.c_str())
+                {
+                    ea = get_entry(ord);
+                    break;
+                }
+            }
+        }
+
+        if (ea == BADADDR)
+        {
+            // Try matching the (short) demangled name of each function.
+            size_t nfuncs = get_func_qty();
+            for (size_t i = 0; i < nfuncs; i++)
+            {
+                func_t* fn = getn_func(i);
+                if (!fn) continue;
+                qstring dname = get_short_name(fn->start_ea);
+                if (!dname.empty() && dname == target.c_str())
+                {
+                    ea = fn->start_ea;
+                    break;
+                }
+            }
+        }
+
         if (ea == BADADDR)
             throw std::runtime_error("Not found: " + target);
 
@@ -171,11 +208,14 @@ void register_core_commands(CommandDispatcher& dispatcher)
             qunlink(tmp.c_str());
         }
 
-        return {
+        json result = {
             {"path", outpath},
             {"success", ok},
             {"func_count", get_func_qty()},
             {"seg_count", get_segm_qty()},
         };
+        if (!ok)
+            result["error"] = "save_database failed for " + outpath + " (path not writable?)";
+        return result;
     });
 }
