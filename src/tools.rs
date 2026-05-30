@@ -1014,10 +1014,13 @@ impl ServerHandler for IdaMcpServer {
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             instructions: Some(
                 "Multi-instance IDA Pro MCP server. Open .i64/.idb databases or raw binaries with open_file, \
-                 then use analysis tools (decompile, disasm, xrefs, etc.) to query them. \
-                 Supports multiple simultaneous sessions for different binaries. \
-                 Raw binaries are loaded through IDA's native loaders (validated on PE and ELF) and auto-analysis runs in background. \
-                 Use analysis_status to poll progress, or wait_analysis to block until done."
+                 then use analysis tools (decompile, disasm, xrefs, types, etc.) to query them. \
+                 Address arguments (ea/target) accept either a hex address or a function/symbol name. \
+                 .i64/.idb databases load instantly; a raw binary is analyzed SYNCHRONOUSLY, so open_file \
+                 blocks until IDA's initial auto-analysis completes (can take minutes on large inputs; \
+                 raise IDA_MCP_OPEN_TIMEOUT if needed). Multiple sessions can be open at once for \
+                 different binaries; opening the SAME file from two sessions shares one worker and one \
+                 mutable database."
                     .into(),
             ),
             ..Default::default()
