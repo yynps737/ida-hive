@@ -35,9 +35,12 @@ impl IdaMcpServer {
     // =========================================================================
 
     /// Open a binary for AI querying.
-    /// Supports .i64/.idb (instant) and raw binaries that IDA can load directly (auto-analysis in background).
-    /// For raw binaries, returns immediately with analyzing=true. Poll with analysis_status or wait with wait_analysis.
-    #[tool(description = "Open a binary for analysis. Supports .i64/.idb databases (instant load) and raw binaries that IDA can load directly (validated on PE and ELF). For raw binaries: returns immediately with analyzing=true, then poll analysis_status or call wait_analysis.")]
+    /// .i64/.idb databases load instantly. A raw binary is analyzed synchronously: open_file does
+    /// NOT return until IDA's initial auto-analysis finishes (can take minutes on large inputs;
+    /// raise IDA_MCP_OPEN_TIMEOUT if needed). Opening the same file again — from any session —
+    /// reuses the existing worker. analysis_status/wait_analysis exist but analysis is normally
+    /// already complete when open_file returns.
+    #[tool(description = "Open a binary for analysis. .i64/.idb databases load instantly. Raw binaries (e.g. PE/ELF that IDA can load) are analyzed SYNCHRONOUSLY: open_file blocks until IDA's initial auto-analysis completes, which can take minutes on large inputs (raise IDA_MCP_OPEN_TIMEOUT if needed). The response reports functions/segments; analysis is normally already done on return. Opening the same file from multiple sessions reuses one worker.")]
     async fn open_file(
         &self,
         #[tool(param)]
