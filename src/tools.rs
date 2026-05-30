@@ -384,7 +384,7 @@ impl IdaMcpServer {
     async fn imports(
         &self,
         #[tool(param)] #[schemars(description = "Name substring filter")] filter: Option<String>,
-        #[tool(param)] #[schemars(description = "Max results (default 500)")] limit: Option<i64>,
+        #[tool(param)] #[schemars(description = "Max results (default 100)")] limit: Option<i64>,
         #[tool(param)] #[schemars(description = "Session")] session: Option<String>,
     ) -> String {
         let mut p = serde_json::json!({});

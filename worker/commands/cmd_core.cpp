@@ -98,48 +98,15 @@ void register_core_commands(CommandDispatcher& dispatcher)
     dispatcher.register_command("lookup_func", [](const json& params) -> json {
         std::string target = params.at("target").get<std::string>();
 
+        // Numeric address first, then the shared name resolver (handles primary
+        // names, demangled/short names, entry exports, and glibc-decorated
+        // aliases like free -> __GI___libc_free). Same logic as parse_ea so
+        // lookup_func and decompile-by-name stay consistent.
         ea_t ea = BADADDR;
         try { ea = (ea_t)std::stoull(target, nullptr, 0); } catch (...) {}
 
         if (ea == BADADDR || !get_func(ea))
-            ea = get_name_ea(BADADDR, target.c_str());
-
-        // get_name_ea only matches the primary/registered name, so exports and
-        // aliases (e.g. "malloc" whose primary name is "__libc_malloc", or
-        // "getc" -> "_IO_getc") don't resolve. Fall back to the entry-point
-        // table (which records export names by ordinal) and to a demangled-name
-        // match before giving up.
-        if (ea == BADADDR)
-        {
-            size_t nentries = get_entry_qty();
-            for (size_t i = 0; i < nentries; i++)
-            {
-                uval_t ord = get_entry_ordinal(i);
-                qstring ename;
-                if (get_entry_name(&ename, ord) > 0 && ename == target.c_str())
-                {
-                    ea = get_entry(ord);
-                    break;
-                }
-            }
-        }
-
-        if (ea == BADADDR)
-        {
-            // Try matching the (short) demangled name of each function.
-            size_t nfuncs = get_func_qty();
-            for (size_t i = 0; i < nfuncs; i++)
-            {
-                func_t* fn = getn_func(i);
-                if (!fn) continue;
-                qstring dname = get_short_name(fn->start_ea);
-                if (!dname.empty() && dname == target.c_str())
-                {
-                    ea = fn->start_ea;
-                    break;
-                }
-            }
-        }
+            ea = resolve_name_ea(target);
 
         if (ea == BADADDR)
             throw std::runtime_error("Not found: " + target);
@@ -188,7 +155,15 @@ void register_core_commands(CommandDispatcher& dispatcher)
             : g_db_dir.substr(g_db_dir.find_last_of("/\\") + 1);
         std::string tmp = outpath + ".sav-" + uniq;
 
+        // Derive the target directory so we can both detect a read-only
+        // destination cheaply and report it precisely on failure.
+        size_t slash = outpath.find_last_of("/\\");
+        std::string outdir = (slash == std::string::npos)
+            ? std::string(".")
+            : (slash == 0 ? std::string("/") : outpath.substr(0, slash));
+
         bool ok = save_database(tmp.c_str(), 0, nullptr, nullptr);
+        std::string error;
         if (ok)
         {
             // POSIX rename atomically replaces; where it won't overwrite, unlink
@@ -200,13 +175,25 @@ void register_core_commands(CommandDispatcher& dispatcher)
                 {
                     qunlink(tmp.c_str());
                     ok = false;
+                    error = "wrote database but could not move it into place at '"
+                          + outpath + "' (directory '" + outdir
+                          + "' may be read-only)";
                 }
             }
         }
         else
         {
             qunlink(tmp.c_str());
+            error = "save_database failed writing to '" + tmp
+                  + "': could not save to '" + outpath + "' (directory '"
+                  + outdir + "' may be read-only or full)";
         }
+
+        // On any failure the destination directory is the usual culprit; when
+        // this was the auto-derived default (no explicit output_path), advise
+        // the caller to pass one pointing at a writable location.
+        if (!ok && !params.contains("output_path"))
+            error += " - pass 'output_path' to save to a writable directory";
 
         json result = {
             {"path", outpath},
@@ -215,7 +202,7 @@ void register_core_commands(CommandDispatcher& dispatcher)
             {"seg_count", get_segm_qty()},
         };
         if (!ok)
-            result["error"] = "save_database failed for " + outpath + " (path not writable?)";
+            result["error"] = error;
         return result;
     });
 }

@@ -324,10 +324,19 @@ void register_type_commands(CommandDispatcher& dispatcher)
             ea_t ea = parse_ea(item.at("ea"));
             std::string type_str = item.at("type").get<std::string>();
 
+            // Use the same apply sequence as set_type. apply_cdecl requires a
+            // trailing ';'; append one if (ignoring trailing whitespace) it is
+            // missing, otherwise apply_cdecl fails and nothing is applied.
+            std::string cdecl_str = type_str;
+            size_t last = cdecl_str.find_last_not_of(" \t\r\n");
+            if (last == std::string::npos || cdecl_str[last] != ';')
+                cdecl_str += ';';
+
             // Try apply_cdecl first (handles full C declarations with names)
-            bool ok = apply_cdecl(nullptr, ea, type_str.c_str());
+            bool ok = apply_cdecl(nullptr, ea, cdecl_str.c_str());
             if (!ok)
             {
+                // Fallback: parse as pure type and apply
                 tinfo_t tif;
                 if (parse_decl(&tif, nullptr, nullptr, type_str.c_str(), PT_SIL))
                     ok = apply_tinfo(ea, tif, TINFO_DEFINITE);
