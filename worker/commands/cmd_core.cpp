@@ -10,6 +10,7 @@
 #include <entry.hpp>
 #include <loader.hpp>
 #include <idalib.hpp>
+#include <fpro.h>
 
 #include "cmd_core.h"
 #include "../util.h"
@@ -131,10 +132,44 @@ void register_core_commands(CommandDispatcher& dispatcher)
         }
         else
         {
-            outpath = get_path(PATH_TYPE_IDB);
+            // Default next to the ORIGINAL input, not the live database — the
+            // live DB may be a private copy in a temp dir. An .i64/.idb input
+            // saves back onto itself; a raw binary saves as "<input>.i64".
+            const std::string& in = g_original_input;
+            outpath = in.empty() ? std::string(get_path(PATH_TYPE_IDB))
+                    : has_db_extension(in) ? in
+                                           : in + ".i64";
         }
 
-        bool ok = save_database(outpath.c_str(), 0, nullptr, nullptr);
+        // Save atomically: write to a per-worker temp sibling in the SAME
+        // directory, then rename over the target. If two workers (e.g. separate
+        // coordinator processes that opened the same binary) race to save the
+        // same path, rename makes it last-writer-wins with no torn database — a
+        // half-written .i64 is never observable at the final path.
+        std::string uniq = g_db_dir.empty()
+            ? std::string("tmp")
+            : g_db_dir.substr(g_db_dir.find_last_of("/\\") + 1);
+        std::string tmp = outpath + ".sav-" + uniq;
+
+        bool ok = save_database(tmp.c_str(), 0, nullptr, nullptr);
+        if (ok)
+        {
+            // POSIX rename atomically replaces; where it won't overwrite, unlink
+            // then retry (leaves a small non-atomic window on those platforms).
+            if (qrename(tmp.c_str(), outpath.c_str()) != 0)
+            {
+                qunlink(outpath.c_str());
+                if (qrename(tmp.c_str(), outpath.c_str()) != 0)
+                {
+                    qunlink(tmp.c_str());
+                    ok = false;
+                }
+            }
+        }
+        else
+        {
+            qunlink(tmp.c_str());
+        }
 
         return {
             {"path", outpath},
