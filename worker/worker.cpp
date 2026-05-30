@@ -13,6 +13,7 @@
 #include <loader.hpp>
 #include <auto.hpp>
 #include <idalib.hpp>
+#include <fpro.h>
 
 #include "protocol.h"
 #include "util.h"
@@ -26,39 +27,120 @@
 #include "commands/cmd_stack.h"
 #include "commands/cmd_composite.h"
 
+// Original input path the AI asked for. Even when we analyze a private copy
+// (or redirect the database elsewhere), this is what save_idb / the ready
+// event report, so the AI always sees the path it provided.
+std::string g_original_input;
+
+// This worker's private database directory (argv[2]); empty for manual runs.
+std::string g_db_dir;
+
 int main(int argc, char* argv[])
 {
     if (argc < 2)
     {
-        qeprintf("Usage: %s <binary_or_idb_path>\n", argv[0]);
+        qeprintf("Usage: %s <binary_or_idb_path> [private_db_dir]\n", argv[0]);
         return 1;
     }
 
     const char* input_path = argv[1];
+    // Optional: a private, writable directory where THIS worker keeps its
+    // database files. The coordinator hands every worker a unique dir so that
+    // (a) the input file's own directory is never written to, and (b) two
+    // workers can open the SAME binary at once without colliding on IDA's
+    // database/lock files. Empty => legacy in-place behavior (manual runs).
+    std::string db_dir = (argc >= 3) ? argv[2] : "";
+
+    g_original_input = input_path;
+    g_db_dir = db_dir;
 
     LOG("Initializing idalib...");
 
     int rc = init_library();
     if (rc != 0)
     {
+        send_event("init_error", {
+            {"stage",   "init_library"},
+            {"code",    rc},
+            {"message", "idalib init_library() failed (check IDA license/activation)"},
+        });
         LOG("init_library() failed: %d", rc);
         return 1;
     }
 
     enable_console_messages(false);
 
-    // Detect if input is a pre-analyzed .i64/.idb or a raw binary
+    // Detect if input is a pre-analyzed .i64/.idb or a raw binary (case-insensitive).
     std::string path_str(input_path);
-    bool is_idb = path_str.size() > 4 &&
-        (path_str.substr(path_str.size() - 4) == ".i64" ||
-         path_str.substr(path_str.size() - 4) == ".idb");
+    bool is_idb = has_db_extension(path_str);
 
-    LOG("Opening %s: %s", is_idb ? "database" : "binary", input_path);
+    // Resolve what we actually hand to open_database and where its database
+    // files land, based on whether the coordinator gave us a private dir.
+    std::string open_path = input_path;   // what open_database loads
+    std::string open_args;                // IDA CLI args (e.g. -odb)
+    if (!db_dir.empty())
+    {
+        if (is_idb)
+        {
+            // A .i64/.idb is itself the database; IDA locks it on open, so two
+            // workers can't share one file. Copy it into our private dir and
+            // open the copy — each worker gets an independent, writable DB.
+            // db_dir is absolute (coordinator-provided), so dest is absolute and
+            // the open is cwd-independent.
+            std::string ext = path_str.substr(path_str.size() - 4);
+            std::string dest = db_dir + "/db" + ext;
+            int crc = qcopyfile(input_path, dest.c_str(), true);
+            if (crc != 0)
+            {
+                send_event("init_error", {
+                    {"stage",   "copy_database"},
+                    {"code",    crc},
+                    {"message", "failed to copy database into private dir"},
+                    {"path",    input_path},
+                });
+                LOG("qcopyfile(%s -> %s) failed: %d", input_path, dest.c_str(), crc);
+                return 1;
+            }
+            open_path = dest;
+        }
+        else
+        {
+            // Raw binary: load from the original (absolute) file but redirect the
+            // new database into our private dir. We chdir into the dir and pass a
+            // BARE relative "-odb" rather than "-o<abspath>/db": the args string is
+            // run through IDA's command-line tokenizer (splits on spaces, treats
+            // '\\' as an escape), so an absolute path with a space or a Windows
+            // backslash would be corrupted. "-odb" has no such characters and is
+            // safe on every platform. The input is the positional file_path arg,
+            // which is NOT re-tokenized.
+            if (qchdir(db_dir.c_str()) != 0)
+            {
+                send_event("init_error", {
+                    {"stage",   "chdir"},
+                    {"message", "failed to chdir into private db dir"},
+                    {"path",    db_dir},
+                });
+                LOG("qchdir(%s) failed", db_dir.c_str());
+                return 1;
+            }
+            open_args = "-odb";
+        }
+    }
+
+    LOG("Opening %s: %s%s%s", is_idb ? "database" : "binary", input_path,
+        open_args.empty() ? "" : " ", open_args.c_str());
 
     // .i64 = already analyzed, raw binary = start auto-analysis in background
-    rc = open_database(input_path, !is_idb);
+    rc = open_database(open_path.c_str(), !is_idb,
+                       open_args.empty() ? nullptr : open_args.c_str());
     if (rc != 0)
     {
+        send_event("init_error", {
+            {"stage",   "open_database"},
+            {"code",    rc},
+            {"message", "open_database() failed (file unreadable, locked, or unsupported)"},
+            {"path",    input_path},
+        });
         LOG("open_database() failed: %d", rc);
         return 1;
     }

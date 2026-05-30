@@ -5,6 +5,7 @@
 // stdout lines and routes responses to waiting callers via oneshot channels.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -24,38 +25,55 @@ type PendingMap = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<serde_json::Valu
 pub struct Slot {
     pub id: String,
     pub path: String,
+    /// Private, writable directory for this worker's database files. Unique per
+    /// slot so concurrent opens of the same binary never collide on IDA's
+    /// on-disk database/lock files. Created on start, removed on drop.
+    db_dir: PathBuf,
     child: Mutex<Option<Child>>,
     pending: PendingMap,
     next_id: AtomicU64,
     stdin_tx: Mutex<Option<mpsc::Sender<String>>>,
     pub ready_data: Mutex<Option<serde_json::Value>>,
-    dead: AtomicBool,
+    dead: Arc<AtomicBool>,
 }
 
 impl Slot {
     pub fn new(id: String, path: String) -> Self {
+        let db_dir = std::env::temp_dir().join(format!("ida-hive-{}", id));
         Self {
             id,
             path,
+            db_dir,
             child: Mutex::new(None),
             pending: Arc::new(Mutex::new(HashMap::new())),
             next_id: AtomicU64::new(1),
             stdin_tx: Mutex::new(None),
             ready_data: Mutex::new(None),
-            dead: AtomicBool::new(false),
+            dead: Arc::new(AtomicBool::new(false)),
         }
     }
 
-    /// Spawn the C++ worker process
-    pub async fn start(&self, worker_exe: &str) -> Result<()> {
+    /// Spawn the C++ worker process and wait (up to `ready_timeout`) for it to
+    /// report ready. Opening a raw binary blocks until initial analysis finishes,
+    /// so the caller passes a generous timeout.
+    pub async fn start(&self, worker_exe: &str, ready_timeout: Duration) -> Result<()> {
         info!(slot = %self.id, path = %self.path, "Starting worker");
         self.dead.store(false, Ordering::SeqCst);
 
+        // Give this worker its own private, writable database directory so it
+        // never writes next to the input and never collides with another worker
+        // opening the same binary.
+        tokio::fs::create_dir_all(&self.db_dir).await.map_err(|e| {
+            anyhow!("Failed to create db dir {}: {}", self.db_dir.display(), e)
+        })?;
+
         let mut child = Command::new(worker_exe)
             .arg(&self.path)
+            .arg(&self.db_dir)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
+            .kill_on_drop(true)
             .spawn()?;
 
         let stdout = child.stdout.take().ok_or_else(|| anyhow!("No stdout"))?;
@@ -78,32 +96,55 @@ impl Slot {
         let reader = BufReader::new(stdout);
         let mut lines = reader.lines();
 
-        // Wait for "ready" event
+        // Wait for the worker's "ready" event, bounded by a timeout. A worker
+        // that hangs without emitting output (or closing stdout) must not block
+        // start() forever — and because open() serializes opens, an unbounded
+        // wait here would stall every other open too.
         let slot_id = self.id.clone();
-        loop {
-            match lines.next_line().await? {
-                Some(line) if !line.is_empty() => {
-                    match serde_json::from_str::<WorkerMessage>(&line) {
-                        Ok(WorkerMessage::Event(evt)) if evt.event == "ready" => {
-                            info!(slot = %slot_id, "Worker ready");
-                            *self.ready_data.lock().await = Some(evt.data);
-                            break;
+        let ready = async {
+            loop {
+                match lines.next_line().await? {
+                    Some(line) if !line.is_empty() => {
+                        match serde_json::from_str::<WorkerMessage>(&line) {
+                            Ok(WorkerMessage::Event(evt)) if evt.event == "ready" => {
+                                info!(slot = %slot_id, "Worker ready");
+                                *self.ready_data.lock().await = Some(evt.data);
+                                return Ok(());
+                            }
+                            // Worker reported a fatal startup failure (bad license,
+                            // locked/unreadable file, copy failure, ...). Surface the
+                            // real reason instead of a generic "exited before ready".
+                            Ok(WorkerMessage::Event(evt)) if evt.event == "init_error" => {
+                                let msg = evt.data.get("message").and_then(|v| v.as_str())
+                                    .unwrap_or("worker failed to initialize");
+                                let stage = evt.data.get("stage").and_then(|v| v.as_str())
+                                    .unwrap_or("?");
+                                let code = evt.data.get("code").and_then(|v| v.as_i64());
+                                return Err(match code {
+                                    Some(c) => anyhow!("Worker init failed at {} (code {}): {}", stage, c, msg),
+                                    None => anyhow!("Worker init failed at {}: {}", stage, msg),
+                                });
+                            }
+                            Ok(_) => {} // ignore other pre-ready messages
+                            Err(e) => warn!(slot = %slot_id, "Parse error during init: {}", e),
                         }
-                        Ok(_) => {} // ignore pre-ready messages
-                        Err(e) => warn!(slot = %slot_id, "Parse error during init: {}", e),
                     }
+                    Some(_) => continue,
+                    None => return Err(anyhow!("Worker exited before sending ready event")),
                 }
-                Some(_) => continue,
-                None => return Err(anyhow!("Worker exited before sending ready event")),
             }
+        };
+        match timeout(ready_timeout, ready).await {
+            Ok(inner) => inner?,
+            Err(_) => return Err(anyhow!(
+                "Worker did not become ready within {}s",
+                ready_timeout.as_secs()
+            )),
         }
 
         // Spawn background stdout reader task
         let pending = Arc::clone(&self.pending);
-        let dead = &self.dead as *const AtomicBool;
-        // SAFETY: Slot is always alive while the background task runs because
-        // stop() kills the child process which closes stdout which exits the task.
-        let dead_flag = unsafe { &*dead };
+        let dead_flag = Arc::clone(&self.dead);
         let slot_id2 = self.id.clone();
 
         tokio::spawn(async move {
@@ -168,6 +209,15 @@ impl Slot {
         let (tx, rx) = oneshot::channel();
         self.pending.lock().await.insert(id, tx);
 
+        // Close the death-window: if the worker died between the liveness check
+        // above and this insert, the reader task has already drained `pending`
+        // and our sender would sit unanswered until the full timeout. Re-check
+        // (the reader sets `dead` before draining) and bail immediately.
+        if self.dead.load(Ordering::SeqCst) {
+            self.pending.lock().await.remove(&id);
+            return Err(anyhow!("Worker is dead"));
+        }
+
         // Send request
         let request = WorkerRequest {
             id,
@@ -220,12 +270,27 @@ impl Slot {
         *self.stdin_tx.lock().await = None;
 
         // Fail all pending
-        let mut map = self.pending.lock().await;
-        for (_, tx) in map.drain() {
-            let _ = tx.send(Err(anyhow!("Worker stopped")));
+        {
+            let mut map = self.pending.lock().await;
+            for (_, tx) in map.drain() {
+                let _ = tx.send(Err(anyhow!("Worker stopped")));
+            }
         }
+
+        // Remove this worker's private database directory.
+        let _ = tokio::fs::remove_dir_all(&self.db_dir).await;
 
         info!(slot = %self.id, "Worker stopped");
         Ok(())
+    }
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        // Backstop cleanup if the slot is dropped without an explicit stop()
+        // (e.g. start() failed). The child is reaped via kill_on_drop; here we
+        // just remove the private database directory. Sync removal is fine — the
+        // directory is small and local.
+        let _ = std::fs::remove_dir_all(&self.db_dir);
     }
 }

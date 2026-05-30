@@ -109,15 +109,26 @@ void register_graph_commands(CommandDispatcher& dispatcher)
             if (depth >= max_depth) continue;
 
             // Find callees
+            std::set<ea_t> seen;
             ea_t curr = f->start_ea;
             while (curr < f->end_ea && curr != BADADDR)
             {
                 xrefblk_t xb;
-                for (bool ok = xb.first_from(curr, XREF_FAR); ok; ok = xb.next_from())
+                for (bool ok = xb.first_from(curr, XREF_ALL); ok; ok = xb.next_from())
                 {
                     if (!xb.iscode) continue;
+                    // Consider only CALLs and JUMPs; skip ordinary flow (fl_F) etc.
+                    bool is_call = (xb.type == fl_CN || xb.type == fl_CF);
+                    bool is_jump = (xb.type == fl_JN || xb.type == fl_JF);
+                    if (!is_call && !is_jump) continue;
+
                     func_t* callee = get_func(xb.to);
                     if (!callee) continue;
+                    // A jump is a call edge only if it tail-calls another function's
+                    // entry; mid-function jumps are internal control flow.
+                    if (is_jump && xb.to != callee->start_ea) continue;
+                    // Keep direct-call/tail-jump self-recursion (real callee).
+                    if (!seen.insert(callee->start_ea).second) continue;
 
                     edges.push_back({
                         {"from", ea_hex(f->start_ea)},
@@ -222,10 +233,19 @@ void register_graph_commands(CommandDispatcher& dispatcher)
             {
                 if (xb2.iscode)
                 {
+                    // Consider only CALLs and JUMPs; skip ordinary flow (fl_F) etc.
+                    bool is_call = (xb2.type == fl_CN || xb2.type == fl_CF);
+                    bool is_jump = (xb2.type == fl_JN || xb2.type == fl_JF);
+                    if (!is_call && !is_jump) continue;
+
                     func_t* callee = get_func(xb2.to);
-                    if (callee && !seen_callees.count(callee->start_ea))
+                    if (!callee) continue;
+                    // A jump is a call edge only if it tail-calls another function's
+                    // entry; mid-function jumps are internal control flow.
+                    if (is_jump && xb2.to != callee->start_ea) continue;
+                    // Keep direct-call/tail-jump self-recursion (real callee).
+                    if (seen_callees.insert(callee->start_ea).second)
                     {
-                        seen_callees.insert(callee->start_ea);
                         qstring cname;
                         get_func_name(&cname, callee->start_ea);
                         callees.push_back({{"ea", ea_hex(callee->start_ea)}, {"name", cname.c_str()}});

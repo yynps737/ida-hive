@@ -84,7 +84,7 @@ void register_search_commands(CommandDispatcher& dispatcher)
     // List all imports
     // params: {limit?: int, filter?: string}
     dispatcher.register_command("imports", [](const json& params) -> json {
-        size_t limit = params.value("limit", 500);
+        size_t limit = params.value("limit", 100);
         std::string filter = params.value("filter", std::string{});
 
         json imports = json::array();

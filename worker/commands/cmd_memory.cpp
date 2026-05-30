@@ -138,10 +138,15 @@ void register_memory_commands(CommandDispatcher& dispatcher)
 
         // Get type info to determine size
         tinfo_t tif;
-        asize_t vsize = 8; // default
+        asize_t vsize = 0;
         if (get_tinfo(&tif, ea))
             vsize = tif.get_size();
-        if (vsize == 0 || vsize == BADSIZE) vsize = 8;
+        if (vsize == 0 || vsize == BADSIZE)
+        {
+            // No type (or unknown size): size the read from the item itself
+            asize_t isz = get_item_size(ea);
+            vsize = (isz != 0) ? isz : 8;
+        }
         if (vsize > 64) vsize = 64;
 
         // Read bytes

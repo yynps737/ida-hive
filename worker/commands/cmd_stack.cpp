@@ -96,36 +96,91 @@ void register_stack_commands(CommandDispatcher& dispatcher)
             throw std::runtime_error("Variable not found: " + old_name);
 
         bool renamed = false, retyped = false;
+        bool want_rename = !new_name.empty();
+        bool want_retype = !type_str.empty();
+        std::string error;
 
-        // Rename
-        if (!new_name.empty())
+        // Parse the requested type BEFORE committing any rename so that an
+        // invalid type does not leave a dangling rename behind (R4: avoid a
+        // misleading partial state). parse_decl() expects a complete C
+        // declaration terminated by ';' -- a bare type string such as
+        // "unsigned __int64", "char *" or "__int64" is rejected. We mirror
+        // what the SDK's tinfo_t::parse() does and append PT_SEMICOLON; if
+        // that still fails we retry as a full named declaration ("TYPE x;"),
+        // which is the form parse_decl() is documented to accept (E3).
+        tinfo_t tif;
+        bool type_ok = false;
+        if (want_retype)
         {
-            renamed = rename_lvar(f->start_ea, old_name.c_str(), new_name.c_str());
+            type_ok = parse_decl(
+                &tif, nullptr, nullptr, type_str.c_str(), PT_SIL | PT_SEMICOLON);
+            if (!type_ok)
+            {
+                std::string named_decl = type_str + " __hive_tmp_decl;";
+                type_ok = parse_decl(
+                    &tif, nullptr, nullptr, named_decl.c_str(),
+                    PT_SIL | PT_SEMICOLON);
+            }
+            if (!type_ok && error.empty())
+                error = "type parse failed";
         }
 
-        // Retype
-        if (!type_str.empty())
+        // Rename. When a retype was also requested but its type could not be
+        // parsed, skip the rename so the operation stays atomic (nothing is
+        // committed when the request as a whole cannot succeed).
+        if (want_rename && (!want_retype || type_ok))
         {
-            tinfo_t tif;
-            if (parse_decl(&tif, nullptr, nullptr, type_str.c_str(), PT_SIL))
+            renamed = rename_lvar(f->start_ea, old_name.c_str(), new_name.c_str());
+            if (!renamed && error.empty())
+                error = "rename_lvar failed";
+        }
+
+        // Retype (only attempted when the type parsed successfully).
+        if (want_retype && type_ok)
+        {
+            // The current name of the variable (after a possible rename above).
+            const char* cur_name = (want_rename && renamed)
+                                 ? new_name.c_str()
+                                 : old_name.c_str();
+
+            // Build the locator the same way the SDK's rename_lvar helper
+            // does: locate_lvar() yields the exact lvar_locator_t that
+            // modify_user_lvar_info() matches against in the persistence
+            // layer. Using the raw decompiled lvar_t::location/defea here
+            // is unreliable and is why the retype previously always failed.
+            lvar_saved_info_t lsi;
+            if (!locate_lvar(&lsi.ll, f->start_ea, cur_name))
             {
-                lvar_saved_info_t lsi;
-                lsi.ll.location = target->location;
-                lsi.ll.defea = target->defea;
+                if (error.empty())
+                    error = "locate_lvar failed";
+            }
+            else
+            {
+                lsi.name = cur_name;
                 lsi.type = tif;
-                lsi.name = new_name.empty() ? old_name.c_str() : new_name.c_str();
                 lsi.size = tif.get_size();
-                retyped = modify_user_lvar_info(f->start_ea, MLI_TYPE, lsi);
+                // Apply name+type together so the stored entry stays
+                // consistent with the (possibly renamed) variable.
+                retyped = modify_user_lvar_info(
+                    f->start_ea, MLI_NAME | MLI_TYPE, lsi);
+                if (!retyped && error.empty())
+                    error = "modify_user_lvar_info failed";
             }
         }
 
-        return {
+        // 'success' must reflect whether every REQUESTED operation applied.
+        bool success = (!want_rename || renamed) && (!want_retype || retyped);
+
+        json result = {
             {"ea", ea_hex(f->start_ea)},
             {"old_name", old_name},
             {"renamed", renamed},
             {"retyped", retyped},
-            {"success", renamed || retyped},
+            {"success", success},
         };
+        if (!success && !error.empty())
+            result["error"] = error;
+        return result;
     });
 
     // ---- delete_stack ----

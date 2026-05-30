@@ -35,9 +35,12 @@ impl IdaMcpServer {
     // =========================================================================
 
     /// Open a binary for AI querying.
-    /// Supports .i64/.idb (instant) and raw binaries that IDA can load directly (auto-analysis in background).
-    /// For raw binaries, returns immediately with analyzing=true. Poll with analysis_status or wait with wait_analysis.
-    #[tool(description = "Open a binary for analysis. Supports .i64/.idb databases (instant load) and raw binaries that IDA can load directly (validated on PE and ELF). For raw binaries: returns immediately with analyzing=true, then poll analysis_status or call wait_analysis.")]
+    /// .i64/.idb databases load instantly. A raw binary is analyzed synchronously: open_file does
+    /// NOT return until IDA's initial auto-analysis finishes (can take minutes on large inputs;
+    /// raise IDA_MCP_OPEN_TIMEOUT if needed). Opening the same file again — from any session —
+    /// reuses the existing worker. analysis_status/wait_analysis exist but analysis is normally
+    /// already complete when open_file returns.
+    #[tool(description = "Open a binary for analysis. .i64/.idb databases load instantly. Raw binaries (e.g. PE/ELF that IDA can load) are analyzed SYNCHRONOUSLY: open_file blocks until IDA's initial auto-analysis completes, which can take minutes on large inputs (raise IDA_MCP_OPEN_TIMEOUT if needed). The response reports functions/segments; analysis is normally already done on return. Opening the same file from multiple sessions reuses one worker.")]
     async fn open_file(
         &self,
         #[tool(param)]
@@ -137,13 +140,15 @@ impl IdaMcpServer {
     async fn lookup_func(
         &self,
         #[tool(param)]
-        #[schemars(description = "Address (hex) or function name to look up")]
-        target: String,
+        #[schemars(description = "Function address in hex (e.g. '0x1400010A0') or function name to look up")]
+        ea: String,
         #[tool(param)]
         #[schemars(description = "Session identifier")]
         session: Option<String>,
     ) -> String {
-        route(&self.coordinator, session, "lookup_func", serde_json::json!({"target": target})).await
+        // Public schema uses `ea` for consistency with every other address-taking
+        // tool; the worker accepts both `ea` and the legacy `target` key.
+        route(&self.coordinator, session, "lookup_func", serde_json::json!({"ea": ea})).await
     }
 
     /// Save the current IDB database.
@@ -379,7 +384,7 @@ impl IdaMcpServer {
     async fn imports(
         &self,
         #[tool(param)] #[schemars(description = "Name substring filter")] filter: Option<String>,
-        #[tool(param)] #[schemars(description = "Max results (default 500)")] limit: Option<i64>,
+        #[tool(param)] #[schemars(description = "Max results (default 100)")] limit: Option<i64>,
         #[tool(param)] #[schemars(description = "Session")] session: Option<String>,
     ) -> String {
         let mut p = serde_json::json!({});
@@ -423,7 +428,38 @@ impl IdaMcpServer {
         &self,
         #[tool(param)] #[schemars(description = "Number value (hex 0x..., decimal, or octal 0...)")] value: String,
     ) -> String {
-        route(&self.coordinator, None, "int_convert", serde_json::json!({"value": value})).await
+        // Pure number-conversion utility: compute directly in Rust, no worker/session needed.
+        // Matches the worker's int_convert output shape (cmd_search.cpp:209-236):
+        // base-0 radix detection (0x.. hex, 0.. octal, else decimal) into a u64.
+        let s = value.trim();
+        let parsed: Option<u64> = if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+            u64::from_str_radix(hex, 16).ok()
+        } else if s.len() > 1 && s.starts_with('0') && s[1..].bytes().all(|b| (b'0'..=b'7').contains(&b)) {
+            u64::from_str_radix(&s[1..], 8).ok()
+        } else {
+            // Decimal: accept unsigned, or negative values via i64 reinterpreted to bits.
+            s.parse::<u64>().ok().or_else(|| s.parse::<i64>().ok().map(|v| v as u64))
+        };
+
+        let val = match parsed {
+            Some(v) => v,
+            None => return serde_json::json!({"error": format!("could not parse '{}' as a number", value)}).to_string(),
+        };
+
+        // Binary: "0b" + bits with no leading zeros ("0b0" for zero).
+        let bin = if val == 0 {
+            "0b0".to_string()
+        } else {
+            format!("0b{:b}", val)
+        };
+
+        serde_json::json!({
+            "hex": format!("0x{:X}", val),
+            "dec": format!("{}", val),
+            "oct": format!("0{:o}", val),
+            "bin": bin,
+            "signed": val as i64,
+        }).to_string()
     }
 
     // =========================================================================
@@ -978,10 +1014,13 @@ impl ServerHandler for IdaMcpServer {
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             instructions: Some(
                 "Multi-instance IDA Pro MCP server. Open .i64/.idb databases or raw binaries with open_file, \
-                 then use analysis tools (decompile, disasm, xrefs, etc.) to query them. \
-                 Supports multiple simultaneous sessions for different binaries. \
-                 Raw binaries are loaded through IDA's native loaders (validated on PE and ELF) and auto-analysis runs in background. \
-                 Use analysis_status to poll progress, or wait_analysis to block until done."
+                 then use analysis tools (decompile, disasm, xrefs, types, etc.) to query them. \
+                 Address arguments (ea/target) accept either a hex address or a function/symbol name. \
+                 .i64/.idb databases load instantly; a raw binary is analyzed SYNCHRONOUSLY, so open_file \
+                 blocks until IDA's initial auto-analysis completes (can take minutes on large inputs; \
+                 raise IDA_MCP_OPEN_TIMEOUT if needed). Multiple sessions can be open at once for \
+                 different binaries; opening the SAME file from two sessions shares one worker and one \
+                 mutable database."
                     .into(),
             ),
             ..Default::default()

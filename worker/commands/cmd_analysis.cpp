@@ -67,7 +67,7 @@ void register_analysis_commands(CommandDispatcher& dispatcher)
         size_t count = params.value("count", 50);
 
         func_t* f = get_func(ea);
-        ea_t start = f ? f->start_ea : ea;
+        ea_t start = ea;
         ea_t end   = f ? f->end_ea   : BADADDR;
 
         json lines = json::array();
@@ -154,15 +154,27 @@ void register_analysis_commands(CommandDispatcher& dispatcher)
             throw std::runtime_error("No function at given address");
 
         json callees = json::array();
+        std::set<ea_t> seen;
         ea_t curr = f->start_ea;
         while (curr < f->end_ea && curr != BADADDR)
         {
             xrefblk_t xb;
-            for (bool ok = xb.first_from(curr, XREF_FAR); ok; ok = xb.next_from())
+            for (bool ok = xb.first_from(curr, XREF_ALL); ok; ok = xb.next_from())
             {
                 if (!xb.iscode) continue;
+                // Follow CALL and tail-JUMP xrefs (skip ordinary flow + data).
+                bool is_call = (xb.type == fl_CN || xb.type == fl_CF);
+                bool is_jump = (xb.type == fl_JN || xb.type == fl_JF);
+                if (!is_call && !is_jump) continue;
                 func_t* target = get_func(xb.to);
                 if (!target) continue;
+                // A jump is only a callee edge if it tail-calls another
+                // function's entry; jumps to a mid-function label are internal
+                // control flow.
+                if (is_jump && xb.to != target->start_ea) continue;
+                // Keep self-edges: a direct CALL / tail-jump to our own entry is
+                // genuine recursion, which is a real callee.
+                if (!seen.insert(target->start_ea).second) continue;
 
                 qstring callee_name;
                 get_func_name(&callee_name, target->start_ea);
@@ -208,13 +220,13 @@ void register_analysis_commands(CommandDispatcher& dispatcher)
 
         if (direction == "from" || direction == "both")
         {
+            qstring fname;
+            func_t* ff = get_func(ea);
+            if (ff) get_func_name(&fname, ff->start_ea);
             xrefblk_t xb;
             for (bool ok = xb.first_from(ea, XREF_ALL); ok && refs.size() < limit; ok = xb.next_from())
             {
                 if (code_only && !xb.iscode) continue;
-                qstring fname;
-                func_t* ff = get_func(xb.to);
-                if (ff) get_func_name(&fname, ff->start_ea);
                 refs.push_back({
                     {"from", ea_hex(ea)}, {"to", ea_hex(xb.to)},
                     {"direction", "from"}, {"type", xb.iscode ? "code" : "data"},

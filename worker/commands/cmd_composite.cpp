@@ -82,10 +82,21 @@ void register_composite_commands(CommandDispatcher& dispatcher)
             {
                 if (xb2.iscode)
                 {
+                    // Only CALL and JUMP xrefs can be callee edges; skip ordinary flow/data.
+                    bool is_call = (xb2.type == fl_CN || xb2.type == fl_CF);
+                    bool is_jump = (xb2.type == fl_JN || xb2.type == fl_JF);
+                    if (!is_call && !is_jump) continue;
+
                     func_t* callee = get_func(xb2.to);
-                    if (callee && !seen.count(callee->start_ea))
+                    if (!callee) continue;
+
+                    // A jump is a callee edge only if it targets another function's entry
+                    // (a tail call); jumps to internal labels are control flow, not callees.
+                    if (is_jump && xb2.to != callee->start_ea) continue;
+
+                    // Keep direct-CALL / tail-jump self-edges: they are genuine recursion.
+                    if (seen.insert(callee->start_ea).second)
                     {
-                        seen.insert(callee->start_ea);
                         qstring n;
                         get_func_name(&n, callee->start_ea);
                         callees.push_back({{"ea", ea_hex(callee->start_ea)}, {"name", n.c_str()}});
@@ -193,7 +204,12 @@ void register_composite_commands(CommandDispatcher& dispatcher)
             ea_t entry_ea = get_entry(ord);
             qstring ename;
             get_entry_name(&ename, ord);
-            entries.push_back({{"ea", ea_hex(entry_ea)}, {"name", ename.c_str()}, {"ordinal", ord}});
+            json entry = {{"ea", ea_hex(entry_ea)}, {"name", ename.c_str()}};
+            // For ELF, get_entry_ordinal() returns the entry EA itself (not a real
+            // ordinal), so only expose 'ordinal' when it is a genuine ordinal.
+            if ((ea_t)ord != entry_ea)
+                entry["ordinal"] = ord;
+            entries.push_back(entry);
         }
 
         return {
@@ -321,12 +337,20 @@ void register_composite_commands(CommandDispatcher& dispatcher)
             while (curr < f->end_ea && curr != BADADDR)
             {
                 xrefblk_t xb2;
-                for (bool ok = xb2.first_from(curr, XREF_FAR); ok; ok = xb2.next_from())
+                for (bool ok = xb2.first_from(curr, XREF_ALL); ok; ok = xb2.next_from())
                 {
                     if (!xb2.iscode) continue;
+                    // Only CALL and JUMP xrefs can be callee edges; skip ordinary flow/data.
+                    bool is_call = (xb2.type == fl_CN || xb2.type == fl_CF);
+                    bool is_jump = (xb2.type == fl_JN || xb2.type == fl_JF);
+                    if (!is_call && !is_jump) continue;
                     func_t* callee = get_func(xb2.to);
-                    if (!callee || seen_callees.count(callee->start_ea)) continue;
-                    seen_callees.insert(callee->start_ea);
+                    if (!callee) continue;
+                    // A jump is a callee edge only if it targets another function's entry
+                    // (a tail call); jumps to internal labels are control flow, not callees.
+                    if (is_jump && xb2.to != callee->start_ea) continue;
+                    // Keep self-edges: a direct CALL / tail-jump to self is genuine recursion.
+                    if (!seen_callees.insert(callee->start_ea).second) continue;
 
                     qstring cname;
                     get_func_name(&cname, callee->start_ea);
@@ -418,6 +442,9 @@ void register_composite_commands(CommandDispatcher& dispatcher)
         {
             throw std::runtime_error("Unknown action: " + action);
         }
+
+        // Invalidate the cached decompilation so the AFTER pass reflects the edit
+        mark_cfunc_dirty(f->start_ea);
 
         // Decompile AFTER
         std::string after = decompile_to_string(f);

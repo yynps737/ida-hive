@@ -17,3 +17,6 @@ worker/build-*/
 # OS
 Thumbs.db
 .DS_Store
+
+# local run wrapper (machine-specific paths)
+ida-hive-wrapper.sh
