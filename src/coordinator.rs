@@ -16,6 +16,10 @@ pub struct CoordinatorConfig {
     pub worker_exe: String,
     /// Maximum number of concurrent slots
     pub max_slots: usize,
+    /// How long to wait for a worker to become ready. Opening a raw binary blocks
+    /// until IDA's initial auto-analysis finishes, which on very large inputs can
+    /// take minutes — so this is generous. It only fails truly-hung workers.
+    pub open_timeout: Duration,
 }
 
 impl Default for CoordinatorConfig {
@@ -23,6 +27,7 @@ impl Default for CoordinatorConfig {
         Self {
             worker_exe: "ida_mcp_worker".to_string(),
             max_slots: 100,
+            open_timeout: Duration::from_secs(600),
         }
     }
 }
@@ -34,10 +39,12 @@ pub struct Coordinator {
     sessions: RwLock<HashMap<String, Arc<Slot>>>,
     /// All active slots
     slots: RwLock<Vec<Arc<Slot>>>,
-    /// Serializes open() so its "find-or-create" decision is atomic. Without it,
-    /// concurrent opens of the same binary all miss the dedup check and spawn
-    /// duplicate workers that collide on the database files.
-    open_lock: Mutex<()>,
+    /// Per-canonical-path locks. Opens of the SAME binary serialize (so they
+    /// dedup to one worker) while opens of DIFFERENT binaries run concurrently.
+    /// A single global lock would serialize ALL opens — and since open blocks
+    /// until initial analysis finishes, one large binary would stall every other
+    /// open across all sessions.
+    path_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
 }
 
 impl Coordinator {
@@ -46,18 +53,22 @@ impl Coordinator {
             config,
             sessions: RwLock::new(HashMap::new()),
             slots: RwLock::new(Vec::new()),
-            open_lock: Mutex::new(()),
+            path_locks: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Get (or create) the per-path lock for a canonical path, pruning entries
+    /// no longer referenced by any in-flight open so the map stays bounded.
+    async fn lock_for_path(&self, path: &str) -> Arc<Mutex<()>> {
+        let mut map = self.path_locks.lock().await;
+        map.retain(|_, v| Arc::strong_count(v) > 1);
+        map.entry(path.to_string())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
     }
 
     /// Open a binary in a new slot, or return existing slot for the path
     pub async fn open(&self, path: &str, session_id: &str) -> Result<Arc<Slot>> {
-        // Hold open_lock for the whole find-or-create so concurrent opens of the
-        // same binary don't each spawn a worker. Held across spawn; releases when
-        // this function returns. (For raw binaries, spawn returns as soon as the
-        // worker is ready — auto-analysis runs in the background — so this is fast.)
-        let _open_guard = self.open_lock.lock().await;
-
         // Canonicalize so different spellings of the same file (relative paths,
         // "./x", symlinks) collapse to ONE worker — this both makes dedup reliable
         // and guarantees the worker (and its save target) get an absolute path.
@@ -67,6 +78,13 @@ impl Coordinator {
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|_| path.to_string());
         let path = canonical.as_str();
+
+        // Serialize opens of THIS binary only (so concurrent opens of the same
+        // path dedup to one worker) while opens of OTHER binaries run in parallel.
+        // open() blocks until initial analysis finishes, so a single global lock
+        // would stall the whole pool behind one large binary.
+        let plock = self.lock_for_path(path).await;
+        let _pguard = plock.lock().await;
 
         // Reap workers that died on their own before doing anything else: they
         // otherwise keep occupying a max_slots slot forever (the only other prune
@@ -133,7 +151,7 @@ impl Coordinator {
         let slot_id = uuid::Uuid::new_v4().to_string();
         let slot = Arc::new(Slot::new(slot_id.clone(), path.to_string()));
 
-        slot.start(&self.config.worker_exe).await?;
+        slot.start(&self.config.worker_exe, self.config.open_timeout).await?;
 
         self.slots.write().await.push(Arc::clone(&slot));
         self.sessions.write().await.insert(session_id.to_string(), Arc::clone(&slot));

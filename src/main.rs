@@ -45,10 +45,18 @@ async fn main() -> Result<()> {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(100);
+    // How long to wait for a worker to become ready. Opening a raw binary blocks
+    // until IDA's initial analysis finishes, which can take minutes on very large
+    // inputs, so default generously and let it be overridden.
+    let open_timeout_secs: u64 = std::env::var("IDA_MCP_OPEN_TIMEOUT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(600);
 
     let config = CoordinatorConfig {
         worker_exe,
         max_slots,
+        open_timeout: std::time::Duration::from_secs(open_timeout_secs),
     };
 
     info!(max_slots = config.max_slots, worker = %config.worker_exe, "Starting coordinator");

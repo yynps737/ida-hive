@@ -53,8 +53,10 @@ impl Slot {
         }
     }
 
-    /// Spawn the C++ worker process
-    pub async fn start(&self, worker_exe: &str) -> Result<()> {
+    /// Spawn the C++ worker process and wait (up to `ready_timeout`) for it to
+    /// report ready. Opening a raw binary blocks until initial analysis finishes,
+    /// so the caller passes a generous timeout.
+    pub async fn start(&self, worker_exe: &str, ready_timeout: Duration) -> Result<()> {
         info!(slot = %self.id, path = %self.path, "Starting worker");
         self.dead.store(false, Ordering::SeqCst);
 
@@ -132,9 +134,12 @@ impl Slot {
                 }
             }
         };
-        match timeout(Duration::from_secs(120), ready).await {
+        match timeout(ready_timeout, ready).await {
             Ok(inner) => inner?,
-            Err(_) => return Err(anyhow!("Worker did not become ready within 120s")),
+            Err(_) => return Err(anyhow!(
+                "Worker did not become ready within {}s",
+                ready_timeout.as_secs()
+            )),
         }
 
         // Spawn background stdout reader task
