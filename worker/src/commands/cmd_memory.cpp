@@ -27,20 +27,19 @@ json cmd_get_bytes(const json &params)
 
     const size_t size = (size_t)requested;
     std::vector<uint8_t> buf(size);
-    ssize_t got = get_bytes(buf.data(), size, ea);
-    if (got < 0)
-        throw std::runtime_error("Failed to read bytes");
+    const size_t got = read_available(buf.data(), size, ea);
 
-    std::string hex;
-    hex.reserve(got * 2);
-    for (ssize_t i = 0; i < got; i++)
+    // Stopping short is normal — .bss carries no stored bytes — but an unannounced
+    // short answer reads as though the range were that small.
+    json out = {{"ea", ea_hex(ea)}, {"hex", to_hex(buf.data(), got)}, {"size", got}};
+    if (got < size)
     {
-        char h[4];
-        qsnprintf(h, sizeof(h), "%02X", buf[i]);
-        hex += h;
+        out["requested"] = size;
+        out["truncated"] = true;
+        out["reason"]    = got == 0 ? "no stored bytes at this address"
+                                    : "range reaches bytes with no stored value";
     }
-
-    return {{"ea", ea_hex(ea)}, {"hex", hex}, {"size", got}};
+    return out;
 }
 
 json cmd_patch_bytes(const json &params)
@@ -74,13 +73,16 @@ json cmd_get_string(const json &params)
         throw std::runtime_error("No string at given address");
 
     std::vector<uint8_t> buf(len + 1, 0);
-    get_bytes(buf.data(), len, ea);
+    const size_t got = read_available(buf.data(), len, ea);
 
-    return {
+    json out = {
         {"ea",     ea_hex(ea)},
         {"string", std::string(reinterpret_cast<char*>(buf.data()))},
         {"length", len},
     };
+    if (got < len)
+        out["truncated"] = true;   // The tail has no stored bytes, not a shorter string.
+    return out;
 }
 
 json cmd_get_int(const json &params)
@@ -148,18 +150,26 @@ json cmd_get_global_value(const json &params)
     if (vsize > 64) vsize = 64;
 
     std::vector<uint8_t> buf(vsize);
-    get_bytes(buf.data(), vsize, ea);
+    const size_t got = read_available(buf.data(), vsize, ea);
 
-    std::string hex;
-    for (size_t i = 0; i < vsize; i++)
-    {
-        char h[4];
-        qsnprintf(h, sizeof(h), "%02X", buf[i]);
-        hex += h;
-    }
+    // An uninitialized global has no stored value. Reporting the zero-filled buffer
+    // would answer "0" for a variable the database says nothing about.
+    if (got == 0)
+        return {
+            {"ea",        ea_hex(ea)},
+            {"size",      vsize},
+            {"hex",       nullptr},
+            {"value",     nullptr},
+            {"has_value", false},
+            {"reason",    "no stored bytes at this address"},
+        };
 
+    const std::string hex = to_hex(buf.data(), got);
+
+    // A value needs every byte of the variable; a partial read cannot produce one.
+    const bool whole = got == vsize;
     uint64_t int_val = 0;
-    if (vsize <= 8)
+    if (whole && vsize <= 8)
     {
         for (size_t i = 0; i < vsize; i++)
             int_val |= ((uint64_t)buf[i]) << (i * 8);
@@ -172,14 +182,21 @@ json cmd_get_global_value(const json &params)
     if (tif.is_correct())
         tif.print(&type_str);
 
-    return {
-        {"ea", ea_hex(ea)},
-        {"name", name.c_str()},
-        {"type", type_str.c_str()},
-        {"size", vsize},
-        {"hex", hex},
-        {"value", vsize <= 8 ? json(int_val) : json(nullptr)},
+    json out = {
+        {"ea",        ea_hex(ea)},
+        {"name",      name.c_str()},
+        {"type",      type_str.c_str()},
+        {"size",      vsize},
+        {"hex",       hex},
+        {"value",     whole && vsize <= 8 ? json(int_val) : json(nullptr)},
+        {"has_value", true},
     };
+    if (!whole)
+    {
+        out["stored"]    = got;
+        out["truncated"] = true;
+    }
+    return out;
 }
 
 const command_entry_t kCommands[] = {
