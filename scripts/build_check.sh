@@ -23,7 +23,7 @@ step()  { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
 ok()    { printf '  \033[32mOK\033[0m   %s\n' "$*"; pass=$((pass+1)); }
 bad()   { printf '  \033[31mFAIL\033[0m %s\n' "$*"; fail=$((fail+1)); }
 
-step "1/5  Rust coordinator (cargo build --release)"
+step "1/6  Rust coordinator (cargo build --release)"
 if cargo build --release >/tmp/ida_hive_cargo.log 2>&1; then
     ok "coordinator built: target/release/ida-hive"
 else
@@ -31,7 +31,7 @@ else
 fi
 
 if [ "${SKIP_WORKER:-0}" != "1" ]; then
-    step "2/5  C++ worker build against the real IDA 9.4 SDK"
+    step "2/6  C++ worker build against the real IDA 9.4 SDK"
 
     if [ -z "${IDASDK:-}" ]; then
         if [ ! -f "$SDK_CACHE/src/include/ida.hpp" ]; then
@@ -61,7 +61,7 @@ if [ "${SKIP_WORKER:-0}" != "1" ]; then
         bad "IDASDK=$IDASDK has no cmake/idasdk_init.cmake (SDK older than 9.4?)"
     fi
 
-    step "3/5  Worker starts against a real IDA install"
+    step "3/6  Worker starts against a real IDA install"
     WORKER="$(find "$BUILD_DIR" -name ida_mcp_worker -type f 2>/dev/null | head -1)"
     if [ -z "$WORKER" ]; then
         bad "no ida_mcp_worker binary produced"
@@ -82,10 +82,10 @@ if [ "${SKIP_WORKER:-0}" != "1" ]; then
         fi
     fi
 else
-    step "2-3/5  C++ worker  (SKIPPED: SKIP_WORKER=1)"
+    step "2-3/6  C++ worker  (SKIPPED: SKIP_WORKER=1)"
 fi
 
-step "4/5  Coordinator end-to-end suite (mock idalib worker)"
+step "4/6  Coordinator end-to-end suite (mock idalib worker)"
 if [ -x target/release/ida-hive ]; then
     if python3 tests/test_coordinator.py; then
         ok "coordinator suite passed"
@@ -96,7 +96,7 @@ else
     bad "target/release/ida-hive missing — cannot run the coordinator suite"
 fi
 
-step "5/5  Worker adversarial stress (hostile input, protocol abuse, pipelining)"
+step "5/6  Worker adversarial stress (hostile input, protocol abuse, pipelining)"
 WORKER="$(find "$BUILD_DIR" -name ida_mcp_worker -type f 2>/dev/null | head -1)"
 if [ -z "$WORKER" ] || { [ ! -x "$IDABIN/idat" ] && [ ! -x "$IDABIN/ida" ]; }; then
     echo "  SKIPPED: needs a built worker and a runnable IDA."
@@ -104,6 +104,16 @@ elif IDABIN="$IDABIN" python3 tests/stress_worker.py --worker "$WORKER" >/tmp/id
     ok "$(tail -1 /tmp/ida_hive_stress.log)"
 else
     bad "stress test failed — see /tmp/ida_hive_stress.log"; tail -15 /tmp/ida_hive_stress.log
+fi
+
+step "6/6  Worker endurance (memory, descriptors, kill cleanup)"
+if [ -z "$WORKER" ] || { [ ! -x "$IDABIN/idat" ] && [ ! -x "$IDABIN/ida" ]; }; then
+    echo "  SKIPPED: needs a built worker and a runnable IDA."
+elif IDABIN="$IDABIN" python3 tests/endurance_worker.py --worker "$WORKER" >/tmp/ida_hive_endur.log 2>&1; then
+    ok "$(tail -1 /tmp/ida_hive_endur.log)"
+    grep -E "^  (memory|fds|cycles):" /tmp/ida_hive_endur.log | sed 's/^/     /'
+else
+    bad "endurance test failed — see /tmp/ida_hive_endur.log"; tail -15 /tmp/ida_hive_endur.log
 fi
 
 printf '\n\033[1m== summary ==\033[0m\n'
