@@ -757,6 +757,86 @@ pub struct FixupsReq {
     pub session: Option<String>,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct NetnodeGetReq {
+    #[schemars(description = "Netnode name, e.g. '$ entry points' or one you created")]
+    pub name: String,
+    #[serde(default)]
+    #[schemars(description = "Maximum numbered slots and string slots to return")]
+    pub limit: Option<i64>,
+    #[serde(default)]
+    #[schemars(description = "Session identifier")]
+    pub session: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct NetnodeListReq {
+    #[serde(default)]
+    #[schemars(description = "Substring a node name must contain")]
+    pub filter: Option<String>,
+    #[serde(default)]
+    #[schemars(description = "Include IDA's own '$ ...' nodes (default true)")]
+    pub include_reserved: Option<bool>,
+    #[serde(default)]
+    #[schemars(description = "Maximum nodes to return")]
+    pub limit: Option<i64>,
+    #[serde(default)]
+    #[schemars(description = "Session identifier")]
+    pub session: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct NetnodeSetReq {
+    #[schemars(description = "Node name. Names starting with '$ ' are reserved by IDA and refused.")]
+    pub name: String,
+    #[serde(default)]
+    #[schemars(description = "String value to store on the node")]
+    pub value: Option<String>,
+    #[serde(default)]
+    #[schemars(description = "Numbered slot to write, paired with alt")]
+    pub index: Option<i64>,
+    #[serde(default)]
+    #[schemars(description = "Value for the numbered slot")]
+    pub alt: Option<i64>,
+    #[serde(default)]
+    #[schemars(description = "Session identifier")]
+    pub session: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct SelectParserReq {
+    #[serde(default)]
+    #[schemars(description = "Source language: c, cpp, objc, swift, go, objcpp")]
+    pub language: Option<String>,
+    #[serde(default)]
+    #[schemars(description = "Parser name, when selecting by name instead of language")]
+    pub parser: Option<String>,
+    #[serde(default)]
+    #[schemars(description = "Session identifier")]
+    pub session: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct DeclareTypeForReq {
+    #[schemars(description = "Source language: c, cpp, objc, swift, go, objcpp")]
+    pub language: String,
+    #[schemars(description = "Declarations to parse, in that language's syntax")]
+    pub decl: String,
+    #[serde(default)]
+    #[schemars(description = "Session identifier")]
+    pub session: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct UndoPointReq {
+    #[serde(default)]
+    #[schemars(description = "Opaque tag recorded with the point, for traceability. Not a display label: IDA derives the undo description from the edits that follow the point.")]
+    pub tag: Option<String>,
+    #[serde(default)]
+    #[schemars(description = "Session identifier")]
+    pub session: Option<String>,
+}
+
 // ---- Tools ----
 
 #[tool_router]
@@ -1453,6 +1533,73 @@ impl IdaMcpServer {
     #[tool(description = "List the regions an image occupies. Images are not contiguous inside a shared cache.")]
     async fn dsc_regions(&self, Parameters(DscImageReq { image, depth: _, session }): Parameters<DscImageReq>) -> String {
         route(&self.coordinator, session, "dsc_regions", serde_json::json!({"image": image})).await
+    }
+
+    // ---- Database internals ----
+
+    #[tool(description = "Read a netnode — the key-value store the whole database is built on. Reaches loader metadata, plugin state and anything else no typed API exposes. Names starting with '$ ' belong to IDA.")]
+    async fn netnode_get(&self, Parameters(NetnodeGetReq { name, limit, session }): Parameters<NetnodeGetReq>) -> String {
+        let mut p = serde_json::json!({"name": name});
+        if let Some(l) = limit { p["limit"] = l.into(); }
+        route(&self.coordinator, session, "netnode_get", p).await
+    }
+
+    #[tool(description = "Enumerate the netnodes present. The only way to discover what a loader or plugin stored without already knowing the node name.")]
+    async fn netnode_list(&self, Parameters(NetnodeListReq { filter, include_reserved, limit, session }): Parameters<NetnodeListReq>) -> String {
+        let mut p = serde_json::json!({});
+        if let Some(f) = filter { p["filter"] = f.into(); }
+        if let Some(r) = include_reserved { p["include_reserved"] = r.into(); }
+        if let Some(l) = limit { p["limit"] = l.into(); }
+        route(&self.coordinator, session, "netnode_list", p).await
+    }
+
+    #[tool(description = "Create or update a netnode you own. IDA's own '$ ...' nodes are refused: writing to one corrupts the database with no diagnostic and no way back.")]
+    async fn netnode_set(&self, Parameters(NetnodeSetReq { name, value, index, alt, session }): Parameters<NetnodeSetReq>) -> String {
+        let mut p = serde_json::json!({"name": name});
+        if let Some(v) = value { p["value"] = v.into(); }
+        if let Some(i) = index { p["index"] = i.into(); }
+        if let Some(a) = alt { p["alt"] = a.into(); }
+        route(&self.coordinator, session, "netnode_set", p).await
+    }
+
+    #[tool(description = "Report which source-language parser declarations are currently read with, and which languages are available.")]
+    async fn parser_status(&self, Parameters(SessionReq { session }): Parameters<SessionReq>) -> String {
+        route(&self.coordinator, session, "parser_status", serde_json::json!({})).await
+    }
+
+    #[tool(description = "Select the parser used by declare_type. Declaring a Swift or Go type through the C parser either fails or silently produces the wrong layout, so set this first.")]
+    async fn select_parser(&self, Parameters(SelectParserReq { language, parser, session }): Parameters<SelectParserReq>) -> String {
+        let mut p = serde_json::json!({});
+        if let Some(l) = language { p["language"] = l.into(); }
+        if let Some(n) = parser { p["parser"] = n.into(); }
+        route(&self.coordinator, session, "select_parser", p).await
+    }
+
+    #[tool(description = "Parse declarations with a named language's parser in one call, instead of switching the parser and then calling declare_type.")]
+    async fn declare_type_for(&self, Parameters(DeclareTypeForReq { language, decl, session }): Parameters<DeclareTypeForReq>) -> String {
+        route(&self.coordinator, session, "declare_type_for", serde_json::json!({"language": language, "decl": decl})).await
+    }
+
+    #[tool(description = "Report what the next undo or redo would revert, so a caller can check before acting.")]
+    async fn undo_status(&self, Parameters(SessionReq { session }): Parameters<SessionReq>) -> String {
+        route(&self.coordinator, session, "undo_status", serde_json::json!({})).await
+    }
+
+    #[tool(description = "Mark a point to come back to. Call it before a batch of edits, not after. The undo description IDA reports comes from the edits made after the point, not from the tag given here.")]
+    async fn undo_point(&self, Parameters(UndoPointReq { tag, session }): Parameters<UndoPointReq>) -> String {
+        let mut p = serde_json::json!({});
+        if let Some(t) = tag { p["tag"] = t.into(); }
+        route(&self.coordinator, session, "undo_point", p).await
+    }
+
+    #[tool(description = "Revert to the last undo point. Fails when there is nothing to undo rather than doing nothing.")]
+    async fn undo(&self, Parameters(SessionReq { session }): Parameters<SessionReq>) -> String {
+        route(&self.coordinator, session, "undo", serde_json::json!({})).await
+    }
+
+    #[tool(description = "Reapply the last undone change.")]
+    async fn redo(&self, Parameters(SessionReq { session }): Parameters<SessionReq>) -> String {
+        route(&self.coordinator, session, "redo", serde_json::json!({})).await
     }
 
     // ---- Analysis lifecycle ----
