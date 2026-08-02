@@ -28,7 +28,7 @@ coordinates them from Rust, and lets AI models talk to all of them at once.
 
 ```
 Claude / Codex / any MCP client
-          |  stdio (MCP 2024-11-05)
+          |  stdio (MCP 2026-07-28)
           v
    ┌───────────────────┐
    │  Rust Coordinator  │   rmcp + tokio
@@ -42,9 +42,9 @@ Claude / Codex / any MCP client
                                   one database each, isolated
 ```
 
-- **Coordinator** (Rust): MCP protocol, session→worker routing, process-pool lifecycle. Built on
-  [rmcp](https://github.com/anthropics/rmcp). Requests are handled concurrently — a slow call on
-  one session does not block other sessions.
+- **Coordinator** (Rust): MCP protocol (spec `2026-07-28`), session→worker routing, process-pool
+  lifecycle. Built on [rmcp](https://github.com/modelcontextprotocol/rust-sdk) 3.x. Requests are
+  handled concurrently — a slow call on one session does not block other sessions.
 - **Worker** (C++): a headless `idalib` process. Loads one `.i64/.idb` or raw binary, answers JSON
   commands by calling the IDA SDK directly. No Python layer.
 
