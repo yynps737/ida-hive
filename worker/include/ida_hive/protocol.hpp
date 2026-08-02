@@ -15,7 +15,17 @@
 
 using json = nlohmann::json;
 
+
+namespace ida_hive {
 using CommandHandler = std::function<json(const json& params)>;
+
+// One row of a command module's registration table. Modules declare their commands
+// as a static array of these so the mapping stays readable in one place.
+struct command_entry_t
+{
+    const char*    name;
+    json         (*handler)(const json& params);
+};
 
 class CommandDispatcher
 {
@@ -23,6 +33,13 @@ public:
     void register_command(const std::string& method, CommandHandler handler)
     {
         handlers_[method] = std::move(handler);
+    }
+
+    template <size_t N>
+    void register_table(const command_entry_t (&table)[N])
+    {
+        for (const command_entry_t& e : table)
+            handlers_[e.name] = e.handler;
     }
 
     // Single-threaded: a slow handler blocks every later request on this worker.
@@ -88,3 +105,5 @@ inline void send_event(const std::string& event_name, const json& data = {})
     json event = {{"event", event_name}, {"data", data}};
     std::cout << event.dump() << "\n" << std::flush;
 }
+
+}  // namespace ida_hive

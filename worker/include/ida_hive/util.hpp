@@ -14,6 +14,8 @@
 
 using json = nlohmann::json;
 
+
+namespace ida_hive {
 // The launch path, and the default save target. The live database is usually a
 // private copy in a temp dir, not the path the caller gave. Defined in worker.cpp.
 extern std::string g_original_input;
@@ -141,3 +143,5 @@ inline ea_t parse_ea(const json& val)
     }
     return (ea_t)val.get<uint64_t>();
 }
+
+}  // namespace ida_hive

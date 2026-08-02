@@ -1,5 +1,5 @@
 // Must stay first; see pch.h for the macro collision it works around.
-#include "pch.h"
+#include "ida_hive/pch.hpp"
 
 #include <ida.hpp>
 #include <idp.hpp>
@@ -8,21 +8,17 @@
 #include <idalib.hpp>
 #include <fpro.h>
 
-#include "protocol.h"
-#include "util.h"
-#include "commands/cmd_core.h"
-#include "commands/cmd_analysis.h"
-#include "commands/cmd_memory.h"
-#include "commands/cmd_modify.h"
-#include "commands/cmd_search.h"
-#include "commands/cmd_graph.h"
-#include "commands/cmd_types.h"
-#include "commands/cmd_stack.h"
-#include "commands/cmd_composite.h"
+#include "ida_hive/protocol.hpp"
+#include "ida_hive/commands.hpp"
+#include "ida_hive/util.hpp"
 
-// Declared in util.h.
+namespace ida_hive {
+// Declared in util.hpp.
 std::string g_original_input;
 std::string g_db_dir;
+}  // namespace ida_hive
+
+using namespace ida_hive;
 
 int main(int argc, char* argv[])
 {
@@ -143,6 +139,7 @@ int main(int argc, char* argv[])
     register_type_commands(dispatcher);
     register_stack_commands(dispatcher);
     register_composite_commands(dispatcher);
+    register_flow_commands(dispatcher);
 
     dispatcher.register_command("ping", [](const json& params) -> json {
         return {{"pong", true}};
