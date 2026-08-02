@@ -92,6 +92,66 @@ jobs:
           path: worker/build-linux/ida_mcp_worker
           retention-days: 7
 
+  worker-windows:
+    name: C++ worker on Windows (MSVC)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clone the public IDA SDK
+        shell: pwsh
+        run: |
+          git clone --branch "$env:IDA_SDK_TAG" --depth 1 `
+            https://github.com/HexRaysSA/ida-sdk.git "$env:RUNNER_TEMP\ida-sdk"
+
+      # Windows is where the build differs most: MSVC is a multi-config generator,
+      # so the binary lands under a per-configuration directory, and the import
+      # libraries sit in a differently named folder than on Linux. Release packaging
+      # depends on both, and neither can be checked from a Linux machine.
+      - name: Build worker
+        shell: pwsh
+        env:
+          IDASDK: ${{ runner.temp }}\ida-sdk\src
+        run: |
+          $env:IDABIN = "$env:IDASDK\lib\x64_win_64"
+          cmake -S worker -B worker/build
+          cmake --build worker/build --config Release
+
+      # The packaging step in release.yml reads this file rather than assuming a
+      # path. If the two ever disagree, the release breaks — so assert it here.
+      - name: Verify the declared artifact path
+        shell: pwsh
+        run: |
+          $declared = (Get-Content worker/build/worker-path.txt -Raw).Trim()
+          Write-Host "build declared: $declared"
+          if (-not (Test-Path $declared)) {
+              throw "worker-path.txt points at $declared, which does not exist"
+          }
+          $size = (Get-Item $declared).Length
+          Write-Host "artifact size: $size bytes"
+          if ($size -lt 100000) { throw "artifact is implausibly small: $size bytes" }
+
+      - name: Upload worker
+        uses: actions/upload-artifact@v4
+        with:
+          name: worker-windows
+          path: worker/build/Release/ida_mcp_worker.exe
+          retention-days: 7
+
+  rust-windows:
+    name: Rust on Windows (MSVC target)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Build
+        run: cargo build --release --locked --target x86_64-pc-windows-msvc
+
   coordinator:
     name: Coordinator suite (mock worker)
     runs-on: ubuntu-latest
@@ -126,7 +186,7 @@ jobs:
   gate:
     name: Full gate (license-free steps)
     runs-on: ubuntu-latest
-    needs: [rust, worker, coordinator]
+    needs: [rust, worker, worker-windows, rust-windows, coordinator]
     steps:
       - uses: actions/checkout@v4
 
