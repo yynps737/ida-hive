@@ -11,7 +11,7 @@ use tokio::sync::{mpsc, oneshot, Mutex, OwnedSemaphorePermit};
 use tokio::time::{timeout, Duration};
 use tracing::{info, warn};
 
-use crate::protocol::*;
+use crate::protocol::{WorkerMessage, WorkerRequest};
 
 type PendingMap = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<serde_json::Value>>>>>;
 
@@ -30,13 +30,13 @@ pub struct Slot {
     pub ready_data: Mutex<Option<serde_json::Value>>,
     dead: Arc<AtomicBool>,
     /// The coordinator's capacity seat. Held for the worker's whole life and
-    /// released on drop, which is what keeps the pool from overshooting max_slots.
+    /// released on drop, which is what keeps the pool from overshooting `max_slots`.
     permit: Mutex<Option<OwnedSemaphorePermit>>,
 }
 
 impl Slot {
     pub fn new(id: String, path: String) -> Self {
-        let db_dir = std::env::temp_dir().join(format!("ida-hive-{}", id));
+        let db_dir = std::env::temp_dir().join(format!("ida-hive-{id}"));
         Self {
             id,
             path,
@@ -113,10 +113,10 @@ impl Slot {
                                     .unwrap_or("worker failed to initialize");
                                 let stage = evt.data.get("stage").and_then(|v| v.as_str())
                                     .unwrap_or("?");
-                                let code = evt.data.get("code").and_then(|v| v.as_i64());
+                                let code = evt.data.get("code").and_then(serde_json::Value::as_i64);
                                 return Err(match code {
-                                    Some(c) => anyhow!("Worker init failed at {} (code {}): {}", stage, c, msg),
-                                    None => anyhow!("Worker init failed at {}: {}", stage, msg),
+                                    Some(c) => anyhow!("Worker init failed at {stage} (code {c}): {msg}"),
+                                    None => anyhow!("Worker init failed at {stage}: {msg}"),
                                 });
                             }
                             Ok(_) => {} // ignore other pre-ready messages
@@ -182,7 +182,7 @@ impl Slot {
     /// Sends a command under the default 120s timeout.
     #[allow(dead_code)]
     pub async fn send_command(&self, method: &str, params: serde_json::Value) -> Result<serde_json::Value> {
-        self.send_command_with_timeout(method, params, Duration::from_secs(120)).await
+        self.send_command_with_timeout(method, params, Duration::from_mins(2)).await
     }
 
     /// Concurrent calls are multiplexed by request id; the worker still answers serially.
@@ -216,13 +216,15 @@ impl Slot {
         };
         let line = serde_json::to_string(&request)? + "\n";
 
-        {
-            let stdin = self.stdin_tx.lock().await;
-            let stdin = stdin.as_ref().ok_or_else(|| anyhow!("Worker not started"))?;
-            stdin.send(line).await.map_err(|_| {
-                anyhow!("Worker stdin closed")
-            })?;
-        }
+        // The sender is cloned out before the send. Holding the mutex across it would
+        // mean that a full channel — a worker alive but not draining stdin — blocks
+        // every other caller here, in a phase the response timeout below does not
+        // cover. mpsc keeps the writes ordered without help from this lock.
+        let stdin = {
+            let guard = self.stdin_tx.lock().await;
+            guard.as_ref().cloned().ok_or_else(|| anyhow!("Worker not started"))?
+        };
+        stdin.send(line).await.map_err(|_| anyhow!("Worker stdin closed"))?;
 
         let timeout_secs = timeout_dur.as_secs();
         match timeout(timeout_dur, rx).await {
@@ -231,12 +233,12 @@ impl Slot {
             Err(_) => {
                 // Drop the entry so a late reply is discarded rather than mismatched.
                 self.pending.lock().await.remove(&id);
-                Err(anyhow!("Worker response timeout ({}s)", timeout_secs))
+                Err(anyhow!("Worker response timeout ({timeout_secs}s)"))
             }
         }
     }
 
-    /// Short-circuits on the `dead` flag before reaping the child via try_wait.
+    /// Short-circuits on the `dead` flag before reaping the child via `try_wait`.
     pub async fn is_alive(&self) -> bool {
         if self.dead.load(Ordering::SeqCst) {
             return false;
