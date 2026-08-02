@@ -1,5 +1,56 @@
 # Changelog
 
+## 1.0.0 — IDA 9.4
+
+First release built against the IDA 9.4 SDK. Earlier runtimes no longer configure: 9.4 replaced
+the SDK's `bootstrap.cmake` with `cmake/idasdk_init.cmake`.
+
+### Tools
+
+64 → 103, in seven new categories reaching 9.4 subsystems that earlier releases did not expose:
+
+- **Control flow** — `switch_info` resolves jump tables to their case targets; `try_blocks` exposes
+  C++/SEH exception structure; `reg_value` asks IDA's value propagation what a register holds;
+  plus `problems`, `fixups`, `seg_regs`.
+- **Microcode** — the decompiler's IR, at any maturity level. The same function yields 8,242
+  microinstructions at `generated` and 952 at `glbopt3`.
+- **Strings** — including the entries the decompiler reconstructs, which carry no bytes at their
+  address and no data scan finds.
+- **Signatures** — FLIRT state, and function classification by origin. 130 of grep's 547 functions
+  are thunks; separating them is the largest single noise reduction on a stripped binary.
+- **Offsets** — mark an immediate as a reference so IDA resolves it to a name and creates the xref.
+- **Index / dyld cache** — `index_*` (disabled by IDA under headless mode) and `dsc_*` for Apple
+  shared caches.
+- **Database internals** — netnode access, source-language parser selection, undo points.
+
+### Fixed
+
+- The worker aborted on a line that parsed but was not an object (`[]`, `null`), taking every
+  in-flight request with it. Serialising a response containing invalid UTF-8 did the same.
+- Concurrent opens could overshoot `IDA_MCP_MAX_SLOTS`: the capacity check released its lock
+  before the slow `start()`, so opens of different paths all saw room. Capacity is now an atomic
+  reservation held for the worker's life.
+- A mutex was held across an await while sending to the worker; a full channel blocked every other
+  caller in a phase no timeout covered.
+
+### Architecture
+
+- `worker/` split into `include/ida_hive/` and `src/`, with an `ida_hive` namespace. Ten headers
+  that each declared one function collapsed into one.
+- Commands are named functions registered from a table, not lambdas inline in a 400-line function.
+- Shared preconditions and call-edge classification extracted; five duplicated copies of the xref
+  walk removed.
+- Warnings denied at build time on both sides. The SDK attaches `-w` to every target it defines,
+  which had been silencing this project's own warnings as well.
+
+### Testing
+
+Ten gates, six of which need an activated IDA: adversarial (2,050 hostile calls), endurance
+(no memory, descriptor or process leaks over 600 heavy calls), tool correctness (26 invariants),
+real-IDA integration, and scale (454,461 functions, 2.1 GB, table sweeps still under a second).
+CI covers the four that need no license, on Linux and Windows.
+
+
 ## Branch `fix/concurrency-and-locking`
 
 Two waves of fixes. The concurrency/lifecycle work and the tool-surface work are independent and
