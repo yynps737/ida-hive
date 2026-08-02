@@ -31,7 +31,10 @@ async fn route(
 ) -> String {
     let session = session.unwrap_or_else(|| "default".to_string());
     match coordinator.route(&session, method, params).await {
-        Ok(v) => serde_json::to_string_pretty(&v).unwrap_or_else(|_| "null".to_string()),
+        // Compact rather than pretty: the consumer is an MCP client, and on a large
+        // listing the indentation is both extra bytes on the wire and extra work to
+        // produce. A 46 KB response carries several KB of nothing but whitespace.
+        Ok(v) => serde_json::to_string(&v).unwrap_or_else(|_| "null".to_string()),
         Err(e) => serde_json::json!({"error": e.to_string()}).to_string(),
     }
 }
@@ -869,7 +872,7 @@ impl IdaMcpServer {
     #[tool(description = "List all active analysis sessions with their loaded binaries and status")]
     async fn list_instances(&self) -> String {
         let slots = self.coordinator.list_slots().await;
-        serde_json::to_string_pretty(&slots).unwrap_or_else(|_| "[]".to_string())
+        serde_json::to_string(&slots).unwrap_or_else(|_| "[]".to_string())
     }
 
     #[tool(description = "Close an analysis session, stopping its worker process")]
