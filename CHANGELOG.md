@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.0.2
+
+Four defects, two from adversarial testing of the 1.0.1 tools and two found while
+diagnosing those — including one that strands a database on every restart.
+
+### Fixed
+
+- **A signal left every worker database behind.** The directories are removed by
+  `Slot::drop`, which terminating on the default disposition never reaches: no
+  unwinding, no destructors. An MCP client stops its servers with a signal, so each
+  restart stranded one database per open session — gigabytes for a real binary, on a
+  `/tmp` that is a RAM disk on most systems. SIGTERM and Ctrl-C now stop the workers
+  and remove their directories first. Catching the signal alone was not enough: the
+  stdio transport reads stdin on a blocking task the runtime waits for, and the peer's
+  pipe is still open, so the process exits once everything it owns has been released.
+- **`read_struct` could not read a bitfield.** `udm_t` carries offset and size in
+  bits; both were divided by 8, which truncates anything narrower than a byte to
+  nothing and loses the bit position of the rest — a 1-bit flag came back empty and a
+  12-bit field came back as the byte beside it. Fields now report their value with its
+  bit offset and width, sign-extended where the declaration is signed.
+- **Unstored bytes read back as zeros.** `get_bytes` stops at the first byte the
+  database holds no value for and returns the count it managed; three of the four call
+  sites discarded it, leaving the caller's zero-filled buffer in place. `get_global_value`
+  answered `0` for an uninitialized variable, indistinguishable from one that holds zero.
+  A short read is now reported as such, and a field or variable with no stored bytes is
+  marked rather than filled in.
+- **The test scripts never removed their temp directories.** Each run left a database
+  behind — several gigabytes for the scale suite — until `/tmp` filled and every
+  process on the machine failed to write.
+
 ## 1.0.1
 
 Five defects found by adversarial testing of the released 1.0.0 tools, each reproduced on a
