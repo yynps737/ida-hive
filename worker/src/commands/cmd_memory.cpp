@@ -16,11 +16,16 @@ namespace {
 json cmd_get_bytes(const json &params)
 {
     ea_t ea = require_ea(params);
-    size_t size = params.at("size").get<size_t>();
 
-    if (size > 0x10000)
+    // Read signed: a negative size taken as size_t becomes an enormous positive one
+    // and gets reported as exceeding the cap, which names the wrong problem.
+    const int64_t requested = params.at("size").get<int64_t>();
+    if (requested < 0)
+        throw std::runtime_error("Size must not be negative");
+    if (requested > 0x10000)
         throw std::runtime_error("Size too large (max 64KB)");
 
+    const size_t size = (size_t)requested;
     std::vector<uint8_t> buf(size);
     ssize_t got = get_bytes(buf.data(), size, ea);
     if (got < 0)
