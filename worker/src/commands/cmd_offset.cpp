@@ -175,15 +175,15 @@ json cmd_offset_candidates(const json &params)
         if (get_refinfo(&ri, ea, 0))
             continue;
 
-        const ea_t base = can_be_off32(ea);
-        if (base == BADADDR)
+        const ea_t target = can_be_off32(ea);
+        if (target == BADADDR)
             continue;
 
         qstring nm;
-        get_name(&nm, base);
+        get_name(&nm, target);
         items.push_back({
             { "ea",     ea_hex(ea) },
-            { "target", ea_hex(base) },
+            { "target", ea_hex(target) },
             { "name",   nm.empty() ? json(nullptr) : json(nm.c_str()) },
         });
     }
