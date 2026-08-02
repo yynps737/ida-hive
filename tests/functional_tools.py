@@ -19,6 +19,7 @@ Usage:
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -39,6 +40,7 @@ def check(name):
 
 class Worker:
     def __init__(self, worker, target, db_dir, ida_path):
+        self.worker, self.ida_path = worker, ida_path
         env = os.environ.copy()
         if ida_path:
             env["LD_LIBRARY_PATH"] = f"{ida_path}{os.pathsep}{env.get('LD_LIBRARY_PATH', '')}"
@@ -119,6 +121,43 @@ def _(w):
             assert_(all(t["target"].startswith("0x") for t in info["targets"]),
                     "a case target is not an address")
             return f"{info['cases']} cases at {info['start_ea']}"
+    return "no switch in this binary (vacuous)"
+
+
+@check("switch_info: every case target lands inside the database")
+def _(w):
+    # A table of signed, table-relative entries read as unsigned produces targets that
+    # are still well-formed addresses, just impossible ones. Only a range check catches it.
+    info = w("get_info")
+    lo, hi = int(info["min_ea"], 16), int(info["max_ea"], 16)
+    for f in w("func_query", min_size=2000, limit=10)["functions"]:
+        for insn in w("insn_query", mnemonic="jmp", ea=f["ea"], limit=60).get("instructions", []):
+            sw = w("switch_info", ea=insn["ea"])
+            if not sw.get("is_switch"):
+                continue
+            for t in sw["targets"]:
+                addr = int(t["target"], 16)
+                assert_(lo <= addr < hi,
+                        f"case {t['index']} targets {t['target']}, outside [{info['min_ea']},{info['max_ea']})")
+            return f"{len(sw['targets'])} targets in range at {sw['start_ea']}"
+    return "no switch in this binary (vacuous)"
+
+
+@check("switch_info: the idiom resolves from its start, not only from the jump")
+def _(w):
+    # get_switch_parent answers at the jump targets only; the bounds check and table
+    # load that precede the jump resolve through neither it nor get_switch_info.
+    for f in w("func_query", min_size=2000, limit=10)["functions"]:
+        for insn in w("insn_query", mnemonic="jmp", ea=f["ea"], limit=60).get("instructions", []):
+            sw = w("switch_info", ea=insn["ea"])
+            if not sw.get("is_switch"):
+                continue
+            at_start = w("switch_info", ea=sw["start_ea"])
+            assert_(at_start.get("is_switch"),
+                    f"start_ea {sw['start_ea']} is reported as not a switch by the tool that named it")
+            assert_(at_start["jump_table"] == sw["jump_table"],
+                    f"start_ea resolves to table {at_start['jump_table']}, the jump to {sw['jump_table']}")
+            return f"{sw['start_ea']} and {sw['ea']} agree"
     return "no switch in this binary (vacuous)"
 
 
@@ -308,6 +347,28 @@ def _(w):
     return f"round-trip at {ea}"
 
 
+@check("get_offset: an operand resolves to its own target, not to the base")
+def _(w):
+    # refinfo_t.target is unset for most references; the target is computed from the
+    # operand value. Reading the field and falling back to base reports address 0,
+    # which has a name, so a wrong answer is indistinguishable from a right one.
+    for f in w("func_query", min_size=2000, limit=6)["functions"]:
+        for insn in w("disasm", ea=f["ea"], count=200).get("lines", []):
+            for n in (0, 1):
+                off = w("get_offset", ea=insn["ea"], operand=n)
+                if not off.get("is_offset"):
+                    continue
+                assert_(off["target"] is not None,
+                        f"{insn['ea']} carries reference info but resolves to nothing")
+                refs = [x["to"] for x in w("xrefs_from", ea=insn["ea"]).get("xrefs", [])
+                        if x.get("type") == "data"]
+                if refs:
+                    assert_(off["target"] in refs,
+                            f"resolved {off['target']}, xrefs say {refs}")
+                return f"{insn['ea']} -> {off['target']} ({off['name']})"
+    return "no marked offset operand in this binary (vacuous)"
+
+
 @check("offset_candidates: a candidate is not already marked")
 def _(w):
     cands = w("offset_candidates", start=w("get_info")["min_ea"], limit=10)["candidates"]
@@ -316,6 +377,64 @@ def _(w):
         assert_(not state["is_offset"],
                 f"{c['ea']} is offered as a candidate but is already an offset")
     return f"{len(cands)} candidates, none pre-marked"
+
+
+@check("wait_analysis: work queued after the initial pass is driven to completion")
+def _(w):
+    # idalib has no background analysis thread. Anything queued after open — the
+    # re-analysis that redefining an applied type schedules, for one — sits there until
+    # the host drives it, so polling auto_is_ok() alone can only ever reach the timeout.
+    #
+    # Redefining a type only queues work where that type is already applied across the
+    # database, which on a stripped binary it is not. The trigger therefore needs debug
+    # info, and a purpose-built sample is the only portable way to get it.
+    src = shutil.which("cc") or shutil.which("gcc")
+    if src is None:
+        return "no compiler for a debug-info sample (vacuous)"
+
+    tmp = tempfile.mkdtemp(prefix="ida-hive-dwarf-")
+    try:
+        c_file, binary = Path(tmp) / "s.c", Path(tmp) / "s"
+        c_file.write_text(
+            "struct record_t { long a; long b; char pad[64]; };\n"
+            "struct record_t g;\n"
+            "long f(struct record_t *r) { return r->a + r->b; }\n"
+            "int main(void) { return (int)f(&g); }\n")
+        if subprocess.run([src, "-g", "-O1", "-o", str(binary), str(c_file)],
+                          capture_output=True).returncode != 0:
+            return "the debug-info sample did not compile (vacuous)"
+
+        db = Path(tmp) / "db"
+        db.mkdir()
+        d = Worker(w.worker, binary, db, w.ida_path)
+        try:
+            assert_(d("wait_analysis", max_seconds=60)["done"], "the sample never settles")
+            d("declare_type", decl="struct record_t { long long a; long long b; char pad[128]; };")
+
+            pending = d("analysis_status")
+            assert_(not pending["done"],
+                    "redefining an applied type queued nothing; the trigger no longer holds")
+
+            result = d("wait_analysis", max_seconds=60)
+            assert_(result["done"] and not result.get("timeout"),
+                    f"wait_analysis gave up after {result.get('elapsed')}s")
+            assert_(d("analysis_status")["done"],
+                    "the status still reports pending work after wait_analysis returned done")
+            return f"queued, then drained in {result['elapsed']:.2f}s"
+        finally:
+            d.close()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+@check("get_bytes: a negative size is named, not reported as too large")
+def _(w):
+    try:
+        w("get_bytes", ea=w("get_info")["min_ea"], size=-16)
+    except RuntimeError as exc:
+        assert_("negative" in str(exc).lower(), f"a negative size was rejected as: {exc}")
+        return "rejected on its own terms"
+    raise AssertionError("a negative size was accepted")
 
 
 # ---- Availability-gated subsystems ----
