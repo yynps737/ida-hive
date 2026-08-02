@@ -633,6 +633,92 @@ def test_mixed_high_concurrency_workload():
 
 
 @test
+def test_slot_exhaustion_under_parallel_open():
+    """More concurrent opens than slots: the excess is rejected, never over-committed."""
+    slots = 4
+    with tempfile.TemporaryDirectory() as td, McpClient(IDA_MCP_MAX_SLOTS=str(slots)) as c:
+        files = [make_bin(td, f"exh{i}.bin") for i in range(slots * 3)]
+
+        def opener(i):
+            return c.call("open_file", path=str(files[i]), session=f"e{i}", _timeout=30)
+
+        with ThreadPoolExecutor(max_workers=len(files)) as pool:
+            results = list(pool.map(opener, range(len(files))))
+
+        ok = [r for r in results if not err_of(r)]
+        rejected = [r for r in results if err_of(r)]
+        # The cap is the invariant; which particular opens win is a race.
+        check(len(ok) <= slots, f"opened {len(ok)} workers with max_slots={slots}")
+        check(len(rejected) == len(files) - len(ok),
+              "every non-opened request must carry an error")
+        check(len(c.call("list_instances")) == len(ok),
+              "instance list disagrees with the opens that succeeded")
+
+
+@test
+def test_parallel_close_of_shared_worker():
+    """Sessions sharing one worker can all close at once without a double stop."""
+    with tempfile.TemporaryDirectory() as td, McpClient() as c:
+        binary = make_bin(td, "sharedclose.bin")
+        sessions = [f"sc{i}" for i in range(8)]
+        for s in sessions:
+            c.call("open_file", path=str(binary), session=s)
+        check(len(c.call("list_instances")) == 1, "sharing should dedup to one worker")
+
+        with ThreadPoolExecutor(max_workers=len(sessions)) as pool:
+            closes = list(pool.map(lambda s: c.call("close_session", session=s), sessions))
+
+        check(all(not err_of(r) for r in closes), f"a concurrent close failed: {closes}")
+        check(c.call("list_instances") == [], "shared worker outlived its last session")
+
+
+@test
+def test_open_close_storm_stays_consistent():
+    """Interleaved opens and closes across threads leave no orphan slots."""
+    rounds = 40
+    with tempfile.TemporaryDirectory() as td, McpClient(IDA_MCP_MAX_SLOTS="6") as c:
+        files = [make_bin(td, f"storm{i}.bin") for i in range(4)]
+
+        def churn(i):
+            sess = f"st{i}"
+            path = files[i % len(files)]
+            c.call("open_file", path=str(path), session=sess, _timeout=30)
+            c.call("close_session", session=sess, _timeout=30)
+
+        with ThreadPoolExecutor(max_workers=10) as pool:
+            list(pool.map(churn, range(rounds)))
+
+        check(c.call("list_instances") == [],
+              "slots survived an open/close storm")
+        # And the coordinator still works afterwards.
+        c.call("open_file", path=str(files[0]), session="after")
+        check(len(c.call("list_instances")) == 1, "coordinator wedged after the storm")
+
+
+@test
+def test_slow_call_does_not_block_other_sessions():
+    """A long call on one worker must not stall requests routed elsewhere."""
+    with tempfile.TemporaryDirectory() as td, McpClient(IDA_MCP_MAX_SLOTS="4") as c:
+        slow_bin = make_bin(td, "slowsess.bin")
+        fast_bin = make_bin(td, "fastsess.bin")
+        c.call("open_file", path=str(slow_bin), session="slow")
+        c.call("open_file", path=str(fast_bin), session="fast")
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            blocked = pool.submit(
+                lambda: c.call("decompile", session="slow", ea="SLEEP:3000", _timeout=30))
+            time.sleep(0.3)
+            started = time.time()
+            c.call("get_info", session="fast", _timeout=30)
+            elapsed = time.time() - started
+            blocked.result(timeout=30)
+
+        # The write-preferring RwLock regression would push this to the full sleep.
+        check(elapsed < 1.5,
+              f"a call on an idle worker waited {elapsed:.1f}s behind another session")
+
+
+@test
 def test_close_during_in_flight_request():
     """Closing a session mid-request fails that call cleanly, no coordinator hang."""
     with tempfile.TemporaryDirectory() as td, McpClient() as c:
