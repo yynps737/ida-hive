@@ -54,6 +54,9 @@ pub struct WorkerResponse {
 
 #[derive(Debug, Deserialize)]
 pub struct WorkerError {
+    // Part of the worker's error wire format; the coordinator surfaces `message`
+    // and does not currently act on the numeric code. Kept for protocol fidelity.
+    #[allow(dead_code)]
     pub code: i64,
     pub message: String,
 }
