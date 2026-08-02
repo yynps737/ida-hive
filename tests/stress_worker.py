@@ -16,6 +16,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -167,6 +168,13 @@ def run(worker_path, target, ida_path):
 
     failures = []
     tmp = tempfile.mkdtemp(prefix="ida-hive-stress-")
+    try:
+        return _run(worker_path, target, ida_path, tmp, failures, commands)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _run(worker_path, target, ida_path, tmp, failures, commands):
     w = Worker(worker_path, target, tmp, ida_path)
 
     # 1. Every command against every hostile payload.

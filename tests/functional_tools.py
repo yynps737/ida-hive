@@ -649,6 +649,13 @@ def main():
         return 0
 
     tmp = tempfile.mkdtemp(prefix="ida-hive-func-")
+    try:
+        return _run_checks(args, tmp)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _run_checks(args, tmp):
     started = time.time()
     w = Worker(args.worker, args.target, tmp, args.ida)
     print(f"  {Path(args.target).name}: {w.ready.get('functions')} functions")

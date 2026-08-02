@@ -21,6 +21,7 @@ Usage:
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -139,8 +140,7 @@ MAX_RESPONSE_MB = 24.0
 MAX_SWEEP_SECONDS = 60.0
 
 
-def run(worker_path, target, ida_path, failures):
-    tmp = tempfile.mkdtemp(prefix="ida-hive-scale-")
+def run(worker_path, target, ida_path, failures, tmp):
     started = time.time()
     w = Worker(worker_path, target, tmp, ida_path)
     analysis = time.time() - started
@@ -253,7 +253,14 @@ def main():
 
     failures = []
     started = time.time()
-    run(args.worker, target, args.ida, failures)
+    # The database this builds is measured in gigabytes, and /tmp is a RAM disk on
+    # many systems. run() returns early on several failures, so the removal has to be
+    # in a finally rather than at the end of the body.
+    tmp = tempfile.mkdtemp(prefix="ida-hive-scale-")
+    try:
+        run(args.worker, target, args.ida, failures, tmp)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
     elapsed = time.time() - started
 
     print()

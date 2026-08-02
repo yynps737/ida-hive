@@ -18,6 +18,7 @@ Usage:
 import argparse
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -122,6 +123,13 @@ def pick_functions(w, count):
 def test_memory_stability(worker_path, target, ida_path, cycles, failures):
     """Heavy handlers in a loop; RSS must plateau rather than climb."""
     tmp = tempfile.mkdtemp(prefix="ida-hive-endur-")
+    try:
+        _memory_stability(worker_path, target, ida_path, cycles, failures, tmp)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _memory_stability(worker_path, target, ida_path, cycles, failures, tmp):
     w = Worker(worker_path, target, tmp, ida_path)
     eas = pick_functions(w, 8)
     if not eas:
@@ -195,9 +203,7 @@ def test_sigkill_leaves_no_tempdir(worker_path, target, ida_path, failures):
     # which is exactly why Slot::drop exists on the Rust side. Assert the shape so a
     # regression in that contract is visible here.
     print(f"  sigkill: pid reaped, {len(contents_before)} db file(s) left for the parent")
-    for p in tmp.rglob("*"):
-        if p.is_file():
-            p.unlink()
+    shutil.rmtree(tmp, ignore_errors=True)
 
 
 def test_spawn_kill_cycles(worker_path, target, ida_path, rounds, failures):
@@ -213,6 +219,7 @@ def test_spawn_kill_cycles(worker_path, target, ida_path, rounds, failures):
         time.sleep(0.1)
         if Path(f"/proc/{pid}").exists():
             leaked.append(pid)
+        shutil.rmtree(tmp, ignore_errors=True)
     own_fds_end = fd_count(os.getpid())
 
     if leaked:
