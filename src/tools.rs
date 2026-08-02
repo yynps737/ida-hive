@@ -957,7 +957,7 @@ impl IdaMcpServer {
 
     // ---- Memory ----
 
-    #[tool(description = "Read raw bytes at address, returned as hex string (max 64KB)")]
+    #[tool(description = "Read raw bytes at address, returned as hex string (max 64KB). A range reaching bytes the database holds no value for — .bss, most often — returns what exists and reports the shortfall.")]
     async fn get_bytes(&self, Parameters(GetBytesReq { ea, size, session }): Parameters<GetBytesReq>) -> String {
         route(&self.coordinator, session, "get_bytes", serde_json::json!({"ea": ea, "size": size})).await
     }
@@ -1271,7 +1271,7 @@ impl IdaMcpServer {
             serde_json::json!({"name": name, "members": members_val})).await
     }
 
-    #[tool(description = "Read struct fields from memory at an address")]
+    #[tool(description = "Read struct fields from memory at an address. Bitfields carry their own value with its bit offset and width; fields with no stored bytes are marked rather than reported as zero.")]
     async fn read_struct(&self, Parameters(ReadStructReq { ea, struct_name, session }): Parameters<ReadStructReq>) -> String {
         route(&self.coordinator, session, "read_struct",
             serde_json::json!({"ea": ea, "struct_name": struct_name})).await
@@ -1297,7 +1297,7 @@ impl IdaMcpServer {
         route(&self.coordinator, session, "delete_stack", serde_json::json!({"ea": ea, "name": name})).await
     }
 
-    #[tool(description = "Read a global variable's value by name or address")]
+    #[tool(description = "Read a global variable's value by name or address. A variable with no stored bytes reports no value instead of zero.")]
     async fn get_global_value(&self, Parameters(GetGlobalValueReq { target, session }): Parameters<GetGlobalValueReq>) -> String {
         route(&self.coordinator, session, "get_global_value", serde_json::json!({"target": target})).await
     }
