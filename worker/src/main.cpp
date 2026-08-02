@@ -218,6 +218,10 @@ int main(int argc, char* argv[])
     // Blocks until analysis settles or max_seconds elapses (default 300, capped 600),
     // emitting analysis_progress events meanwhile. Returns at once in the common case,
     // since open_database already ran the initial pass.
+    //
+    // The deadline is checked between drain passes, not during one: a pass runs on this
+    // thread and cannot be interrupted. It is bounded by the queued work, not by the
+    // size of the database.
     dispatcher.register_command("wait_analysis", [](const json& params) -> json {
         if (!auto_is_ok())
             auto_wait_range(inf_get_min_ea(), inf_get_max_ea());
