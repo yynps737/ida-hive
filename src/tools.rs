@@ -19,7 +19,7 @@ pub struct IdaMcpServer {
     pub coordinator: Arc<Coordinator>,
     // Read by the #[tool_handler]-generated dispatch, never by hand.
     #[allow(dead_code)]
-    tool_router: ToolRouter<IdaMcpServer>,
+    tool_router: ToolRouter<Self>,
 }
 
 // Every tool body funnels through here.
@@ -949,7 +949,9 @@ impl IdaMcpServer {
         } else if s.len() > 1 && s.starts_with('0') && s[1..].bytes().all(|b| (b'0'..=b'7').contains(&b)) {
             u64::from_str_radix(&s[1..], 8).ok()
         } else {
-            s.parse::<u64>().ok().or_else(|| s.parse::<i64>().ok().map(|v| v as u64))
+            // A negative literal is accepted and kept as its two's-complement bits,
+            // which is what the worker does and what a reverser expects to see.
+            s.parse::<u64>().ok().or_else(|| s.parse::<i64>().ok().map(i64::cast_unsigned))
         };
 
         let val = match parsed {
@@ -957,14 +959,15 @@ impl IdaMcpServer {
             None => return serde_json::json!({"error": format!("could not parse '{}' as a number", value)}).to_string(),
         };
 
-        let bin = if val == 0 { "0b0".to_string() } else { format!("0b{:b}", val) };
+        let bin = if val == 0 { "0b0".to_string() } else { format!("0b{val:b}") };
 
         serde_json::json!({
             "hex": format!("0x{:X}", val),
             "dec": format!("{}", val),
             "oct": format!("0{:o}", val),
             "bin": bin,
-            "signed": val as i64,
+            // The same bits read as signed; this reinterpretation is the point of the tool.
+            "signed": val.cast_signed(),
         }).to_string()
     }
 
@@ -1223,7 +1226,8 @@ impl IdaMcpServer {
         // in flight, while the coordinator's max_slots bounds how many workers exist
         // at all. When the pool is the tighter one, the excess opens fail rather than
         // queue, and each failure lands in that file's result entry.
-        let concurrency = concurrency.unwrap_or(5).clamp(1, 50) as usize;
+        // Clamped to 50 first, so usize holds it on every target width.
+        let concurrency = usize::try_from(concurrency.unwrap_or(5).clamp(1, 50)).unwrap_or(5);
         let max_secs = max_analysis_seconds.unwrap_or(600).clamp(30, 3600);
 
         if let Some(ref dir) = output_dir {

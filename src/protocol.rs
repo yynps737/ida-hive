@@ -27,11 +27,11 @@ impl<'de> Deserialize<'de> for WorkerMessage {
         if v.get("id").is_some() {
             let resp: WorkerResponse =
                 serde_json::from_value(v).map_err(serde::de::Error::custom)?;
-            Ok(WorkerMessage::Response(resp))
+            Ok(Self::Response(resp))
         } else if v.get("event").is_some() {
             let evt: WorkerEvent =
                 serde_json::from_value(v).map_err(serde::de::Error::custom)?;
-            Ok(WorkerMessage::Event(evt))
+            Ok(Self::Event(evt))
         } else {
             Err(serde::de::Error::custom(
                 "Expected 'id' (response) or 'event' (event) field",

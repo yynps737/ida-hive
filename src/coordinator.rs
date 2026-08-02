@@ -21,7 +21,7 @@ impl Default for CoordinatorConfig {
         Self {
             worker_exe: "ida_mcp_worker".to_string(),
             max_slots: 100,
-            open_timeout: Duration::from_secs(600),
+            open_timeout: Duration::from_mins(10),
         }
     }
 }
@@ -37,8 +37,8 @@ pub struct Coordinator {
     path_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     /// One permit per slot, taken before a worker is spawned and released when it is
     /// dropped. Counting `slots` instead would leave a window between the check and
-    /// the push — start() is slow, so concurrent opens of *different* paths would all
-    /// see room and overshoot max_slots together.
+    /// the push — `start()` is slow, so concurrent opens of *different* paths would all
+    /// see room and overshoot `max_slots` together.
     capacity: Arc<Semaphore>,
 }
 
@@ -55,7 +55,7 @@ impl Coordinator {
     }
 
     /// The same cap `open()` enforces.
-    pub fn max_slots(&self) -> usize {
+    pub const fn max_slots(&self) -> usize {
         self.config.max_slots
     }
 
@@ -74,9 +74,7 @@ impl Coordinator {
         // Collapses relative paths, "./x" and symlinks onto one worker, and hands
         // the worker an absolute path to save against. An unresolvable path is
         // passed through so the worker reports the real open error.
-        let canonical = std::fs::canonicalize(path)
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|_| path.to_string());
+        let canonical = std::fs::canonicalize(path).map_or_else(|_| path.to_string(), |p| p.to_string_lossy().into_owned());
         let path = canonical.as_str();
 
         let plock = self.lock_for_path(path).await;
@@ -165,24 +163,26 @@ impl Coordinator {
             let sessions = self.sessions.read().await;
             sessions.get(session_id).cloned()
         }
-        .ok_or_else(|| anyhow!("No active session: {}. Use open_file first.", session_id))?;
+        .ok_or_else(|| anyhow!("No active session: {session_id}. Use open_file first."))?;
 
         if !slot.is_alive().await {
-            return Err(anyhow!("Worker for session {} has died", session_id));
+            return Err(anyhow!("Worker for session {session_id} has died"));
         }
 
         let timeout = match method {
             // Clears the worker's own bound by 10s so it reports the timeout first.
             "wait_analysis" => {
+                // Clamped into range first, so the conversion cannot lose a value.
                 let max_sec = params.get("max_seconds")
-                    .and_then(|v| v.as_i64())
+                    .and_then(serde_json::Value::as_i64)
                     .unwrap_or(300)
-                    .min(600) as u64;
+                    .clamp(0, 600)
+                    .unsigned_abs();
                 Duration::from_secs(max_sec + 10)
             }
             // Only bounds stuck-but-alive workers; a dead one surfaces at once via
             // stdout close.
-            _ => Duration::from_secs(300),
+            _ => Duration::from_mins(5),
         };
 
         slot.send_command_with_timeout(method, params, timeout).await
@@ -311,7 +311,7 @@ impl Coordinator {
         collected.into_iter().map(|(_, r)| r).collect()
     }
 
-    /// open → wait_analysis → save_idb, returning the .i64 path and its counts.
+    /// open → `wait_analysis` → `save_idb`, returning the .i64 path and its counts.
     async fn convert_single(
         coord: &Arc<Self>,
         path: &str,
@@ -324,34 +324,32 @@ impl Coordinator {
         let wait_params = serde_json::json!({"max_seconds": max_analysis_seconds});
         let wait_result = coord.route(session_id, "wait_analysis", wait_params).await?;
 
-        let done = wait_result.get("done").and_then(|v| v.as_bool()).unwrap_or(false);
+        let done = wait_result.get("done").and_then(serde_json::Value::as_bool).unwrap_or(false);
         if !done {
-            return Err(anyhow!("Analysis timed out after {}s", max_analysis_seconds));
+            return Err(anyhow!("Analysis timed out after {max_analysis_seconds}s"));
         }
 
         let output_path = if let Some(dir) = output_dir {
             let filename = PathBuf::from(path)
-                .file_name()
-                .map(|f| f.to_string_lossy().to_string())
-                .unwrap_or_else(|| "unknown".to_string());
+                .file_name().map_or_else(|| "unknown".to_string(), |f| f.to_string_lossy().to_string());
             let mut out = PathBuf::from(dir);
-            out.push(format!("{}.i64", filename));
+            out.push(format!("{filename}.i64"));
             out.to_string_lossy().to_string()
         } else {
             // Suffixed, not replaced: xxx.dll → xxx.dll.i64
-            format!("{}.i64", path)
+            format!("{path}.i64")
         };
 
         let save_params = serde_json::json!({"output_path": output_path});
         let save_result = coord.route(session_id, "save_idb", save_params).await?;
 
-        let success = save_result.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
+        let success = save_result.get("success").and_then(serde_json::Value::as_bool).unwrap_or(false);
         if !success {
-            return Err(anyhow!("save_idb failed for {}", path));
+            return Err(anyhow!("save_idb failed for {path}"));
         }
 
-        let func_count = wait_result.get("functions").and_then(|v| v.as_u64()).unwrap_or(0);
-        let seg_count = wait_result.get("segments").and_then(|v| v.as_u64()).unwrap_or(0);
+        let func_count = wait_result.get("functions").and_then(serde_json::Value::as_u64).unwrap_or(0);
+        let seg_count = wait_result.get("segments").and_then(serde_json::Value::as_u64).unwrap_or(0);
 
         Ok((output_path, func_count, seg_count))
     }
