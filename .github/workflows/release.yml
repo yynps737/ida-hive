@@ -46,6 +46,9 @@ jobs:
           cmake -S worker -B worker/build-linux -G Ninja -DIDASDK="${RUNNER_TEMP}/ida-sdk"
           cmake --build worker/build-linux
 
+      - name: Rust lints
+        run: cargo clippy --release --all-targets --locked
+
       - name: Build Linux server
         run: cargo build --release
 
@@ -55,7 +58,9 @@ jobs:
           pkg_root="${RUNNER_TEMP}/${asset_base}"
           mkdir -p "${pkg_root}"
           install -m 0755 target/release/ida-hive "${pkg_root}/ida-hive"
-          install -m 0755 worker/build-linux/ida_mcp_worker "${pkg_root}/ida_mcp_worker"
+          # The build records where the binary landed; a hard-coded path here would
+          # drift the moment the output directory changes.
+          install -m 0755 "$(cat worker/build-linux/worker-path.txt)" "${pkg_root}/ida_mcp_worker"
           install -m 0644 README.md LICENSE tests/live/test_smoke.py tests/live/test_batch.py "${pkg_root}/"
           cat > "${pkg_root}/ida-hive-linux-wrapper.sh" <<'SH'
           #!/usr/bin/env bash
@@ -116,7 +121,10 @@ jobs:
           $pkgRoot = Join-Path $env:RUNNER_TEMP $assetBase
           New-Item -ItemType Directory -Force -Path $pkgRoot | Out-Null
           Copy-Item target/x86_64-pc-windows-msvc/release/ida-hive.exe $pkgRoot
-          Copy-Item worker/build/Release/ida_mcp_worker.exe $pkgRoot
+          # Multi-config generators put the binary under a per-config directory, so
+          # the path comes from the build rather than being assumed here.
+          $workerExe = Get-Content worker/build/worker-path.txt -Raw
+          Copy-Item $workerExe.Trim() $pkgRoot
           Copy-Item README.md, LICENSE, tests/live/test_smoke.py, tests/live/test_batch.py $pkgRoot
           @'
           @echo off
