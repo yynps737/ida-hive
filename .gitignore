@@ -5,7 +5,7 @@ target/
 worker/build/
 worker/build-*/
 
-# SDK clone cache used by tests/build_check.sh (public headers, not committed)
+# SDK clone cache used by scripts/build_check.sh (public headers, not committed)
 worker/.ida-sdk-cache/
 
 # IDE
@@ -16,6 +16,7 @@ worker/.ida-sdk-cache/
 # Test artifacts
 /tmp/
 *.txt.bak
+__pycache__/
 
 # OS
 Thumbs.db

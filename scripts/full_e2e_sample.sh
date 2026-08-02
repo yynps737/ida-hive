@@ -2,9 +2,9 @@
 set -euo pipefail
 
 # Windows-oriented deep E2E sample for a known PE target.
-# For the cross-platform smoke path, use test_smoke.py instead.
+# For the cross-platform smoke path, use tests/live/test_smoke.py instead.
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IDA_HIVE_IDA_PATH="${IDA_HIVE_IDA_PATH:-/c/Program Files/IDA Professional 9.2}"
 export PATH="${IDA_HIVE_IDA_PATH}:$PATH"
 export IDA_MCP_WORKER_EXE="${IDA_MCP_WORKER_EXE:-$ROOT/worker/build/Release/ida_mcp_worker.exe}"

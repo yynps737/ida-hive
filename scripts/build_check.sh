@@ -20,9 +20,9 @@
 # touches or requires any license file.
 #
 # Usage:
-#   tests/build_check.sh                 # full run, cloning the SDK if needed
-#   IDASDK=/path/to/ida-sdk/src tests/build_check.sh
-#   SKIP_WORKER=1 tests/build_check.sh   # coordinator only (no SDK/C++ build)
+#   scripts/build_check.sh                 # full run, cloning the SDK if needed
+#   IDASDK=/path/to/ida-sdk/src scripts/build_check.sh
+#   SKIP_WORKER=1 scripts/build_check.sh   # coordinator only (no SDK/C++ build)
 
 set -uo pipefail
 
