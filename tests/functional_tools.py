@@ -104,6 +104,42 @@ def assert_(cond, msg):
         raise AssertionError(msg)
 
 
+BITFIELD_SRC = (
+    "struct bits_t { unsigned a:1; unsigned b:3; unsigned c:12; signed s:5;\n"
+    "                long long pad1; long long pad2; };\n"
+    "struct bits_t g_bits;\n"
+    "int main(void) { return g_bits.a; }\n")
+
+
+DWARF_TYPE_SRC = (
+    "struct record_t { long a; long b; char pad[64]; };\n"
+    "struct record_t g;\n"
+    "long f(struct record_t *r) { return r->a + r->b; }\n"
+    "int main(void) { return (int)f(&g); }\n")
+
+
+def _build_sample(w, source):
+    """Compiles a sample and opens it in its own worker.
+
+    Returns (worker, tempdir) or a note explaining why the check is vacuous. The
+    system binaries these tests run against are stripped and carry no struct types,
+    so anything type-shaped needs a sample built here.
+    """
+    cc = shutil.which("cc") or shutil.which("gcc")
+    if cc is None:
+        return "no compiler for a debug-info sample (vacuous)"
+
+    tmp = tempfile.mkdtemp(prefix="ida-hive-sample-")
+    c_file, binary, db = Path(tmp) / "s.c", Path(tmp) / "s", Path(tmp) / "db"
+    c_file.write_text(source)
+    if subprocess.run([cc, "-g", "-O0", "-o", str(binary), str(c_file)],
+                      capture_output=True).returncode != 0:
+        shutil.rmtree(tmp, ignore_errors=True)
+        return "the sample did not compile (vacuous)"
+    db.mkdir()
+    return Worker(w.worker, binary, db, w.ida_path), tmp
+
+
 # ---- Control flow ----
 
 @check("switch_info: target list agrees with the declared table size")
@@ -386,44 +422,27 @@ def _(w):
     # the host drives it, so polling auto_is_ok() alone can only ever reach the timeout.
     #
     # Redefining a type only queues work where that type is already applied across the
-    # database, which on a stripped binary it is not. The trigger therefore needs debug
-    # info, and a purpose-built sample is the only portable way to get it.
-    src = shutil.which("cc") or shutil.which("gcc")
-    if src is None:
-        return "no compiler for a debug-info sample (vacuous)"
-
-    tmp = tempfile.mkdtemp(prefix="ida-hive-dwarf-")
+    # database, which on a stripped binary it is not.
+    built = _build_sample(w, DWARF_TYPE_SRC)
+    if isinstance(built, str):
+        return built
+    d, tmp = built
     try:
-        c_file, binary = Path(tmp) / "s.c", Path(tmp) / "s"
-        c_file.write_text(
-            "struct record_t { long a; long b; char pad[64]; };\n"
-            "struct record_t g;\n"
-            "long f(struct record_t *r) { return r->a + r->b; }\n"
-            "int main(void) { return (int)f(&g); }\n")
-        if subprocess.run([src, "-g", "-O1", "-o", str(binary), str(c_file)],
-                          capture_output=True).returncode != 0:
-            return "the debug-info sample did not compile (vacuous)"
+        assert_(d("wait_analysis", max_seconds=60)["done"], "the sample never settles")
+        d("declare_type", decl="struct record_t { long long a; long long b; char pad[128]; };")
 
-        db = Path(tmp) / "db"
-        db.mkdir()
-        d = Worker(w.worker, binary, db, w.ida_path)
-        try:
-            assert_(d("wait_analysis", max_seconds=60)["done"], "the sample never settles")
-            d("declare_type", decl="struct record_t { long long a; long long b; char pad[128]; };")
+        pending = d("analysis_status")
+        assert_(not pending["done"],
+                "redefining an applied type queued nothing; the trigger no longer holds")
 
-            pending = d("analysis_status")
-            assert_(not pending["done"],
-                    "redefining an applied type queued nothing; the trigger no longer holds")
-
-            result = d("wait_analysis", max_seconds=60)
-            assert_(result["done"] and not result.get("timeout"),
-                    f"wait_analysis gave up after {result.get('elapsed')}s")
-            assert_(d("analysis_status")["done"],
-                    "the status still reports pending work after wait_analysis returned done")
-            return f"queued, then drained in {result['elapsed']:.2f}s"
-        finally:
-            d.close()
+        result = d("wait_analysis", max_seconds=60)
+        assert_(result["done"] and not result.get("timeout"),
+                f"wait_analysis gave up after {result.get('elapsed')}s")
+        assert_(d("analysis_status")["done"],
+                "the status still reports pending work after wait_analysis returned done")
+        return f"queued, then drained in {result['elapsed']:.2f}s"
     finally:
+        d.close()
         shutil.rmtree(tmp, ignore_errors=True)
 
 
@@ -435,6 +454,76 @@ def _(w):
         assert_("negative" in str(exc).lower(), f"a negative size was rejected as: {exc}")
         return "rejected on its own terms"
     raise AssertionError("a negative size was accepted")
+
+
+@check("read_struct: a bitfield reports its own bits, not the bytes around it")
+def _(w):
+    # udm_t carries offset and size in bits. Dividing both by 8 truncates anything
+    # narrower than a byte to nothing and loses the bit position of the rest, so the
+    # answer for a 1-bit flag is either empty or a neighbouring byte's value.
+    built = _build_sample(w, BITFIELD_SRC)
+    if isinstance(built, str):
+        return built
+    d, tmp = built
+    try:
+        ea = next(g["ea"] for g in d("list_globals", limit=400)["globals"] if g["name"] == "g_bits")
+        d("patch_bytes", ea=ea, hex="ABCDEF12")   # little-endian uint32 0x12EFCDAB
+        got = {f["name"]: f for f in d("read_struct", ea=ea, struct_name="bits_t")["fields"]}
+
+        # Hand-computed from 0x12EFCDAB: bit 0, bits 1-3, bits 4-15, bits 16-20.
+        for name, width, want in (("a", 1, 1), ("b", 3, 5), ("c", 12, 0xCDA), ("s", 5, 15)):
+            f = got[name]
+            assert_(f.get("bit_width") == width,
+                    f"{name}: bit_width {f.get('bit_width')}, expected {width}")
+            assert_(f.get("value") == want,
+                    f"{name}: value {f.get('value')}, expected {want}")
+
+        # The sign bit of a signed bitfield must extend, not read as a large positive.
+        d("patch_bytes", ea=ea, hex="00001F00")   # bits 16-20 all set
+        s = next(f for f in d("read_struct", ea=ea, struct_name="bits_t")["fields"]
+                 if f["name"] == "s")
+        assert_(s["value"] == -1, f"a 5-bit signed 0b11111 came back as {s['value']}")
+        return "4 widths correct, sign extension correct"
+    finally:
+        d.close()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+@check("an address with no stored bytes is reported as such, never as zeros")
+def _(w):
+    # get_bytes stops at the first byte the database holds no value for. Ignoring the
+    # count leaves the caller's zero-filled buffer in place, so .bss reads back as a
+    # variable whose value is 0 rather than one with no value at all.
+    built = _build_sample(w, BITFIELD_SRC)
+    if isinstance(built, str):
+        return built
+    d, tmp = built
+    try:
+        bss = [x for x in d("list_segments")["segments"] if x.get("name") == ".bss"]
+        assert_(bss, "the sample has no .bss")
+        start = bss[0]["start"]
+
+        raw = d("get_bytes", ea=start, size=32)
+        assert_(raw["size"] < 32 and raw.get("truncated") is True,
+                f"a read over unstored bytes returned {raw['size']} bytes without saying so")
+        assert_(raw.get("requested") == 32, "the requested size is not reported back")
+
+        g = d("get_global_value", target=start)
+        assert_(g.get("has_value") is False and g.get("value") is None,
+                f"an uninitialized global reported a value: {g.get('value')}")
+
+        ea = next(x["ea"] for x in d("list_globals", limit=400)["globals"] if x["name"] == "g_bits")
+        d("patch_bytes", ea=ea, hex="ABCDEF12")   # 4 of the struct's bytes, no more
+        st = d("read_struct", ea=ea, struct_name="bits_t")
+        assert_(st.get("truncated") is True and st.get("stored") == 4,
+                f"read_struct did not report the shortfall: stored={st.get('stored')}")
+        beyond = [f for f in st["fields"] if f.get("no_data")]
+        assert_(beyond, "fields past the stored bytes were emitted as zeros")
+        assert_(all(f["hex"] is None for f in beyond), "a field with no data still carries hex")
+        return f"{raw['size']}/32 bytes stored, {len(beyond)} fields without data"
+    finally:
+        d.close()
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 # ---- Availability-gated subsystems ----
