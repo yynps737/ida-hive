@@ -75,6 +75,13 @@ endif()
 set_target_properties(ida_mcp_worker PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 
+# Multi-config generators append the configuration to the output directory, so the
+# path differs between MSVC and a single-config build. Packaging must not guess at
+# it: this file records where the binary actually landed, and release.yml reads it.
+file(GENERATE
+    OUTPUT "${CMAKE_BINARY_DIR}/worker-path.txt"
+    CONTENT "$<TARGET_FILE:ida_mcp_worker>")
+
 # Header-only, so no install step is needed.
 include(FetchContent)
 FetchContent_Declare(
