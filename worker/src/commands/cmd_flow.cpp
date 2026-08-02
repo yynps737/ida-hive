@@ -11,6 +11,7 @@
 #include <regfinder.hpp>
 #include <problems.hpp>
 #include <fixup.hpp>
+#include <segment.hpp>
 #include <segregs.hpp>
 
 #include "ida_hive/commands.hpp"
@@ -42,13 +43,13 @@ int64 read_table_slot(ea_t slot, int element_size, bool is_signed)
 // Three flags decide the arithmetic, and getting any of them wrong yields a
 // plausible-looking address that points nowhere:
 //   SWI_SELFREL  the entry is relative to its own slot, not to elbase
-//   SWI_ELBASE   elbase is meaningful; otherwise the base is zero
+//   SWI_ELBASE   elbase is meaningful; without it the switch segment's base applies
 //   SWI_SUBTRACT the entry is subtracted from the base instead of added
 ea_t decode_target(const switch_info_t &si, ea_t slot, int64 raw)
 {
     const ea_t base = (si.flags & SWI_SELFREL) != 0 ? slot
                     : (si.flags & SWI_ELBASE)  != 0 ? si.elbase
-                                                    : 0;
+                                                    : get_segment_base(si.startea);
     const int64 off = raw << si.get_shift();
     // Wrapping is intentional: the sum is an address, and a negative displacement
     // is normal for a self-relative or elbase-relative table.
