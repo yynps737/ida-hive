@@ -21,3 +21,29 @@ anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4"] }
+
+# Warnings are denied rather than reported, so a regression fails the build instead
+# of scrolling past. pedantic and nursery are on because both caught real defects
+# here: a mutex held across an await, and casts that silently reinterpreted signs.
+# The allowances below are per-lint judgements, not a blanket opt-out.
+[lints.rust]
+warnings = "deny"
+
+[lints.clippy]
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+
+# Fires on locks whose guard could be dropped a line earlier. Every remaining site
+# holds the guard deliberately: dropping it sooner would open a check-then-act race.
+significant_drop_tightening = "allow"
+# Rewrites `match opt { Some(x) => .., None => .. }` into map_or_else. The match
+# reads better where the two arms are asymmetric, which is the case at each site.
+option_if_let_else = "allow"
+# Wants `let ... else` for fallible binds that already return a descriptive error.
+manual_let_else = "allow"
+# tools.rs is one impl block of 93 tool wrappers; splitting it would scatter the
+# MCP surface across files for no benefit.
+too_many_lines = "allow"
+# The `continue` marks a deliberately skipped message class and is clearer than
+# inverting the condition around a long block.
+needless_continue = "allow"
