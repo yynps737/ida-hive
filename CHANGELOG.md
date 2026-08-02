@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.0.1
+
+Five defects found by adversarial testing of the released 1.0.0 tools, each reproduced on a
+purpose-built sample before and after the fix.
+
+### Fixed
+
+- **`switch_info` placed every case target 4 GiB too high** on tables of signed, table-relative
+  entries. The entries were read unsigned, so a `movsxd` displacement of `0xFFFFF1C5` was added
+  rather than subtracted. The base is now chosen from `SWI_SELFREL` / `SWI_ELBASE` / `SWI_SUBTRACT`
+  as the SDK defines them — including the segment base that applies when `SWI_ELBASE` is absent,
+  where the code had assumed zero. A target outside the database is reported as such instead of
+  being emitted as a plausible address that resolves to nothing.
+- **`switch_info` answered only at the jump itself**, though it claimed to work anywhere in the
+  idiom: `get_switch_parent` is defined for the jump targets, not for the bounds check and table
+  load that precede the jump. The idiom now resolves by walking forward, within the containing
+  function, to the jump it ends at. Addresses that are genuinely not part of a switch still report
+  `is_switch: false`.
+- **`get_offset` resolved nothing.** `refinfo_t::target` is unset for most references — the target
+  is computed from the operand value — so reading the field and falling back to the base reported
+  address 0, which has a name. It now uses `calc_target()`, taking the operand value from `value`
+  for immediates and `addr` otherwise.
+- **`wait_analysis` could only ever time out** on work queued after the initial pass. idalib has no
+  background analysis thread, and the worker never drove the queues, so polling `auto_is_ok()` in a
+  sleep loop waited on something nothing was advancing. Redefining a type already applied across a
+  database — from DWARF, for one — left `analysis_status` reporting pending work permanently.
+- **`get_bytes` reported a negative size as exceeding the 64 KB cap**, having read it as unsigned.
+
+### Changed
+
+- `get_offset` and `clear_offset` no longer advertise the `type`, `base` and `target` parameters
+  they share with `set_offset`. They read an operand; those three were accepted and discarded.
+
 ## 1.0.0 — IDA 9.4
 
 First release built against the IDA 9.4 SDK. Earlier runtimes no longer configure: 9.4 replaced
