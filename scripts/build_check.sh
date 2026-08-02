@@ -24,7 +24,7 @@ step()  { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
 ok()    { printf '  \033[32mOK\033[0m   %s\n' "$*"; pass=$((pass+1)); }
 bad()   { printf '  \033[31mFAIL\033[0m %s\n' "$*"; fail=$((fail+1)); }
 
-step "1/9  Rust coordinator (cargo build --release)"
+step "1/10  Rust coordinator (cargo build --release)"
 if cargo build --release >/tmp/ida_hive_cargo.log 2>&1; then
     ok "coordinator built: target/release/ida-hive"
 else
@@ -33,7 +33,7 @@ fi
 
 # The lint policy lives in Cargo.toml at deny level, but only clippy evaluates the
 # clippy lints — a plain build passes regardless, so this step is what enforces them.
-step "2/9  Rust lints (cargo clippy, warnings denied)"
+step "2/10  Rust lints (cargo clippy, warnings denied)"
 if cargo clippy --release --all-targets >/tmp/ida_hive_clippy.log 2>&1; then
     ok "no lint findings"
 else
@@ -42,7 +42,7 @@ else
 fi
 
 if [ "${SKIP_WORKER:-0}" != "1" ]; then
-    step "3/9  C++ worker build against the real IDA 9.4 SDK"
+    step "3/10  C++ worker build against the real IDA 9.4 SDK"
 
     if [ -z "${IDASDK:-}" ]; then
         if [ ! -f "$SDK_CACHE/src/include/ida.hpp" ]; then
@@ -72,7 +72,7 @@ if [ "${SKIP_WORKER:-0}" != "1" ]; then
         bad "IDASDK=$IDASDK has no cmake/idasdk_init.cmake (SDK older than 9.4?)"
     fi
 
-    step "4/9  Worker starts against a real IDA install"
+    step "4/10  Worker starts against a real IDA install"
     WORKER="$(find "$BUILD_DIR" -name ida_mcp_worker -type f 2>/dev/null | head -1)"
     if [ -z "$WORKER" ]; then
         bad "no ida_mcp_worker binary produced"
@@ -93,10 +93,10 @@ if [ "${SKIP_WORKER:-0}" != "1" ]; then
         fi
     fi
 else
-    step "3-4/9  C++ worker  (SKIPPED: SKIP_WORKER=1)"
+    step "4-5/10  C++ worker  (SKIPPED: SKIP_WORKER=1)"
 fi
 
-step "5/9  Coordinator end-to-end suite (mock idalib worker)"
+step "5/10  Coordinator end-to-end suite (mock idalib worker)"
 if [ -x target/release/ida-hive ]; then
     if python3 tests/test_coordinator.py; then
         ok "coordinator suite passed"
@@ -107,7 +107,7 @@ else
     bad "target/release/ida-hive missing — cannot run the coordinator suite"
 fi
 
-step "6/9  Worker adversarial stress (hostile input, protocol abuse, pipelining)"
+step "6/10  Worker adversarial stress (hostile input, protocol abuse, pipelining)"
 WORKER="$(find "$BUILD_DIR" -name ida_mcp_worker -type f 2>/dev/null | head -1)"
 if [ -z "$WORKER" ] || { [ ! -x "$IDABIN/idat" ] && [ ! -x "$IDABIN/ida" ]; }; then
     echo "  SKIPPED: needs a built worker and a runnable IDA."
@@ -117,7 +117,7 @@ else
     bad "stress test failed — see /tmp/ida_hive_stress.log"; tail -15 /tmp/ida_hive_stress.log
 fi
 
-step "7/9  Worker endurance (memory, descriptors, kill cleanup)"
+step "7/10  Worker endurance (memory, descriptors, kill cleanup)"
 if [ -z "$WORKER" ] || { [ ! -x "$IDABIN/idat" ] && [ ! -x "$IDABIN/ida" ]; }; then
     echo "  SKIPPED: needs a built worker and a runnable IDA."
 elif IDABIN="$IDABIN" python3 tests/endurance_worker.py --worker "$WORKER" >/tmp/ida_hive_endur.log 2>&1; then
@@ -127,7 +127,17 @@ else
     bad "endurance test failed — see /tmp/ida_hive_endur.log"; tail -15 /tmp/ida_hive_endur.log
 fi
 
-step "8/9  Real-IDA integration (concurrent workers, sharing, slot cap)"
+step "8/10  Tool correctness (invariants over the 9.4 tools)"
+if [ -z "$WORKER" ] || { [ ! -x "$IDABIN/idat" ] && [ ! -x "$IDABIN/ida" ]; }; then
+    echo "  SKIPPED: needs a built worker and a runnable IDA."
+elif IDABIN="$IDABIN" python3 tests/functional_tools.py --worker "$WORKER" >/tmp/ida_hive_func.log 2>&1; then
+    ok "$(tail -1 /tmp/ida_hive_func.log)"
+else
+    bad "tool correctness failed — see /tmp/ida_hive_func.log"
+    grep -E "^  - " /tmp/ida_hive_func.log | head -8
+fi
+
+step "9/10  Real-IDA integration (concurrent workers, sharing, slot cap)"
 if [ -z "$WORKER" ] || { [ ! -x "$IDABIN/idat" ] && [ ! -x "$IDABIN/ida" ]; }; then
     echo "  SKIPPED: needs a built worker and a runnable IDA."
 elif IDABIN="$IDABIN" python3 tests/integration_real_ida.py --worker "$WORKER" >/tmp/ida_hive_integ.log 2>&1; then
@@ -140,7 +150,7 @@ fi
 # Analysis of a large binary runs for minutes, so this is opt-in rather than part
 # of every check.
 if [ "${RUN_SCALE:-0}" = "1" ]; then
-    step "9/9  Worker scale (large binary, table sweeps, paging)"
+    step "10/10  Worker scale (large binary, table sweeps, paging)"
     if [ -z "$WORKER" ] || { [ ! -x "$IDABIN/idat" ] && [ ! -x "$IDABIN/ida" ]; }; then
         echo "  SKIPPED: needs a built worker and a runnable IDA."
     elif IDABIN="$IDABIN" python3 tests/scale_worker.py --worker "$WORKER" >/tmp/ida_hive_scale.log 2>&1; then
@@ -150,7 +160,7 @@ if [ "${RUN_SCALE:-0}" = "1" ]; then
         bad "scale test failed — see /tmp/ida_hive_scale.log"; tail -20 /tmp/ida_hive_scale.log
     fi
 else
-    step "9/9  Worker scale  (SKIPPED: set RUN_SCALE=1, takes several minutes)"
+    step "10/10  Worker scale  (SKIPPED: set RUN_SCALE=1, takes several minutes)"
 fi
 
 printf '\n\033[1m== summary ==\033[0m\n'
