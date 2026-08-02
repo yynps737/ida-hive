@@ -1,4 +1,3 @@
-// cmd_core.cpp - Core query commands
 #include "../pch.h"
 
 #include <ida.hpp>
@@ -17,7 +16,6 @@
 
 void register_core_commands(CommandDispatcher& dispatcher)
 {
-    // ---- get_info ----
     dispatcher.register_command("get_info", [](const json& params) -> json {
         qstring procname = inf_get_procname();
         return {
@@ -31,8 +29,6 @@ void register_core_commands(CommandDispatcher& dispatcher)
         };
     });
 
-    // ---- list_funcs ----
-    // params: {offset?: int, limit?: int, filter?: string}
     dispatcher.register_command("list_funcs", [](const json& params) -> json {
         size_t offset = params.value("offset", 0);
         size_t limit  = params.value("limit", 100);
@@ -67,7 +63,6 @@ void register_core_commands(CommandDispatcher& dispatcher)
         return {{"functions", funcs}, {"total", total}, {"matched", matched}};
     });
 
-    // ---- list_segments ----
     dispatcher.register_command("list_segments", [](const json& params) -> json {
         json segs = json::array();
         int qty = get_segm_qty();
@@ -93,8 +88,6 @@ void register_core_commands(CommandDispatcher& dispatcher)
         return {{"segments", segs}};
     });
 
-    // ---- lookup_func ----
-    // params: {target: string}  — address or name
     dispatcher.register_command("lookup_func", [](const json& params) -> json {
         // Accept either "ea" (current schema) or "target" (legacy callers).
         std::string target;
@@ -103,10 +96,7 @@ void register_core_commands(CommandDispatcher& dispatcher)
         else
             target = params.at("target").get<std::string>();
 
-        // Numeric address first, then the shared name resolver (handles primary
-        // names, demangled/short names, entry exports, and glibc-decorated
-        // aliases like free -> __GI___libc_free). Same logic as parse_ea so
-        // lookup_func and decompile-by-name stay consistent.
+        // Shares parse_ea's resolver, so lookup_func and decompile accept the same names.
         ea_t ea = BADADDR;
         try { ea = (ea_t)std::stoull(target, nullptr, 0); } catch (...) {}
 
@@ -130,9 +120,6 @@ void register_core_commands(CommandDispatcher& dispatcher)
         };
     });
 
-    // ---- save_idb ----
-    // Save current analysis as .i64 database
-    // params: {output_path?: string}  — optional custom save path
     dispatcher.register_command("save_idb", [](const json& params) -> json {
         std::string outpath;
         if (params.contains("output_path") && !params["output_path"].is_null())
@@ -141,27 +128,24 @@ void register_core_commands(CommandDispatcher& dispatcher)
         }
         else
         {
-            // Default next to the ORIGINAL input, not the live database — the
-            // live DB may be a private copy in a temp dir. An .i64/.idb input
-            // saves back onto itself; a raw binary saves as "<input>.i64".
+            // Targets the original input, not the live database, which is usually a
+            // private copy in a temp dir. A database saves onto itself; a raw binary
+            // saves as "<input>.i64".
             const std::string& in = g_original_input;
             outpath = in.empty() ? std::string(get_path(PATH_TYPE_IDB))
                     : has_db_extension(in) ? in
                                            : in + ".i64";
         }
 
-        // Save atomically: write to a per-worker temp sibling in the SAME
-        // directory, then rename over the target. If two workers (e.g. separate
-        // coordinator processes that opened the same binary) race to save the
-        // same path, rename makes it last-writer-wins with no torn database — a
-        // half-written .i64 is never observable at the final path.
+        // Written to a per-worker sibling then renamed over the target. Racing workers
+        // resolve to last-writer-wins, and a half-written .i64 is never observable at
+        // the final path. The sibling must share the directory for rename to be atomic.
         std::string uniq = g_db_dir.empty()
             ? std::string("tmp")
             : g_db_dir.substr(g_db_dir.find_last_of("/\\") + 1);
         std::string tmp = outpath + ".sav-" + uniq;
 
-        // Derive the target directory so we can both detect a read-only
-        // destination cheaply and report it precisely on failure.
+        // Kept for both the cheap writability probe and the failure message.
         size_t slash = outpath.find_last_of("/\\");
         std::string outdir = (slash == std::string::npos)
             ? std::string(".")
@@ -171,8 +155,8 @@ void register_core_commands(CommandDispatcher& dispatcher)
         std::string error;
         if (ok)
         {
-            // POSIX rename atomically replaces; where it won't overwrite, unlink
-            // then retry (leaves a small non-atomic window on those platforms).
+            // POSIX rename replaces in place. Where it refuses to overwrite, the unlink
+            // retry reopens a brief window in which the target does not exist.
             if (qrename(tmp.c_str(), outpath.c_str()) != 0)
             {
                 qunlink(outpath.c_str());
@@ -194,9 +178,8 @@ void register_core_commands(CommandDispatcher& dispatcher)
                   + outdir + "' may be read-only or full)";
         }
 
-        // On any failure the destination directory is the usual culprit; when
-        // this was the auto-derived default (no explicit output_path), advise
-        // the caller to pass one pointing at a writable location.
+        // The hint only fires for the auto-derived default, where the caller had no
+        // say in the destination.
         if (!ok && !params.contains("output_path"))
             error += " - pass 'output_path' to save to a writable directory";
 

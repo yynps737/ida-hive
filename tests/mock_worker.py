@@ -93,7 +93,7 @@ class Worker:
         self.functions = 100 + (sum(self.name.encode()) % 400)
         self.segments = 4
 
-    # ---- individual methods -------------------------------------------------
+    # ---- individual methods ----
 
     def m_ping(self, _p):
         return {"pong": True, "path": self.path}
@@ -158,7 +158,7 @@ class Worker:
             return {"success": False, "error": str(exc)}
         return {"success": True, "path": out}
 
-    # ---- dispatch -----------------------------------------------------------
+    # ---- dispatch ----
 
     def handle(self, method, params):
         fn = getattr(self, "m_" + method, None)

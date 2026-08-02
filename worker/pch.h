@@ -1,12 +1,8 @@
-// pch.h - Precompiled header / include-order fix
-//
-// IDA SDK's pro.h redefines fgetc/fputc/etc. via macros, which breaks
-// nlohmann/json's internal use of std::fgetc. Fix: include nlohmann/json
-// FIRST, before any IDA headers.
+// The IDA SDK's pro.h macro-redefines fgetc/fputc, which breaks nlohmann/json's
+// use of std::fgetc. Parsing json first makes the later redefinition harmless.
 
 #pragma once
 
-// ---- Standard library + nlohmann/json FIRST ----
 #include <cstdint>
 #include <cstdio>
 #include <string>
@@ -22,6 +18,5 @@
 #include <chrono>
 #include <nlohmann/json.hpp>
 
-// ---- IDA SDK headers AFTER ----
-// (pro.h will be pulled in by ida.hpp, redefining stdio macros,
-//  but nlohmann/json is already fully parsed at this point)
+// No IDA header belongs above this line. Includers pull in ida.hpp, and with it
+// pro.h, only after this point.

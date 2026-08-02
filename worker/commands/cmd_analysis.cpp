@@ -1,4 +1,3 @@
-// cmd_analysis.cpp - Analysis commands: decompile, disasm, xrefs_to, callees
 #include "../pch.h"
 
 #include <ida.hpp>
@@ -19,7 +18,6 @@ static bool s_hexrays_init_tried = false;
 
 void register_analysis_commands(CommandDispatcher& dispatcher)
 {
-    // ---- decompile ----
     dispatcher.register_command("decompile", [](const json& params) -> json {
         if (!s_hexrays_init_tried)
         {
@@ -61,7 +59,6 @@ void register_analysis_commands(CommandDispatcher& dispatcher)
         };
     });
 
-    // ---- disasm ----
     dispatcher.register_command("disasm", [](const json& params) -> json {
         ea_t ea = parse_ea(params.at("ea"));
         size_t count = params.value("count", 50);
@@ -100,7 +97,6 @@ void register_analysis_commands(CommandDispatcher& dispatcher)
         };
     });
 
-    // ---- xrefs_to ----
     dispatcher.register_command("xrefs_to", [](const json& params) -> json {
         ea_t ea = parse_ea(params.at("ea"));
 
@@ -123,7 +119,6 @@ void register_analysis_commands(CommandDispatcher& dispatcher)
         return {{"ea", ea_hex(ea)}, {"xrefs", refs}};
     });
 
-    // ---- xrefs_from ----
     dispatcher.register_command("xrefs_from", [](const json& params) -> json {
         ea_t ea = parse_ea(params.at("ea"));
 
@@ -146,7 +141,6 @@ void register_analysis_commands(CommandDispatcher& dispatcher)
         return {{"ea", ea_hex(ea)}, {"xrefs", refs}};
     });
 
-    // ---- callees ----
     dispatcher.register_command("callees", [](const json& params) -> json {
         ea_t ea = parse_ea(params.at("ea"));
         func_t* f = get_func(ea);
@@ -162,18 +156,16 @@ void register_analysis_commands(CommandDispatcher& dispatcher)
             for (bool ok = xb.first_from(curr, XREF_ALL); ok; ok = xb.next_from())
             {
                 if (!xb.iscode) continue;
-                // Follow CALL and tail-JUMP xrefs (skip ordinary flow + data).
+                // fl_F is ordinary fall-through, not an edge in the call graph.
                 bool is_call = (xb.type == fl_CN || xb.type == fl_CF);
                 bool is_jump = (xb.type == fl_JN || xb.type == fl_JF);
                 if (!is_call && !is_jump) continue;
                 func_t* target = get_func(xb.to);
                 if (!target) continue;
-                // A jump is only a callee edge if it tail-calls another
-                // function's entry; jumps to a mid-function label are internal
-                // control flow.
+                // A jump counts only when it lands on another function's entry;
+                // mid-function targets are internal control flow.
                 if (is_jump && xb.to != target->start_ea) continue;
-                // Keep self-edges: a direct CALL / tail-jump to our own entry is
-                // genuine recursion, which is a real callee.
+                // Genuine self-recursion survives; the self-edge is not spurious.
                 if (!seen.insert(target->start_ea).second) continue;
 
                 qstring callee_name;
@@ -190,9 +182,6 @@ void register_analysis_commands(CommandDispatcher& dispatcher)
         return {{"callees", callees}};
     });
 
-    // ---- xref_query ----
-    // Unified xref query with direction and type filters
-    // params: {ea: string, direction?: "to"|"from"|"both", code_only?: bool, limit?: int}
     dispatcher.register_command("xref_query", [](const json& params) -> json {
         ea_t ea = parse_ea(params.at("ea"));
         std::string direction = params.value("direction", std::string("both"));
@@ -238,16 +227,13 @@ void register_analysis_commands(CommandDispatcher& dispatcher)
         return {{"ea", ea_hex(ea)}, {"xrefs", refs}, {"count", refs.size()}};
     });
 
-    // ---- xrefs_to_field ----
-    // Find references to a specific struct field offset within functions
-    // params: {ea: string, field_offset: int, limit?: int}
-    // Searches disassembly for operands referencing [reg+field_offset]
+    // Matches on the displacement in [reg+offset] operands, so it finds uses that
+    // carry no type information.
     dispatcher.register_command("xrefs_to_field", [](const json& params) -> json {
         ea_t ea = parse_ea(params.at("ea"));
         int field_offset = params.at("field_offset").get<int>();
         size_t limit = params.value("limit", 50);
 
-        // Search within the function for references to the offset
         func_t* f = get_func(ea);
         if (!f) throw std::runtime_error("No function at address");
 
@@ -260,7 +246,6 @@ void register_analysis_commands(CommandDispatcher& dispatcher)
             int len = decode_insn(&insn, curr);
             if (len <= 0) { curr = next_head(curr, f->end_ea); continue; }
 
-            // Check operands for displacement matching field_offset
             for (int op = 0; op < UA_MAXOP; op++)
             {
                 if (insn.ops[op].type == o_void) break;
@@ -280,9 +265,6 @@ void register_analysis_commands(CommandDispatcher& dispatcher)
         return {{"ea", ea_hex(f->start_ea)}, {"field_offset", field_offset}, {"refs", refs}};
     });
 
-    // ---- analyze_batch ----
-    // Batch analysis: decompile multiple functions at once
-    // params: {addresses: [string]}
     dispatcher.register_command("analyze_batch", [](const json& params) -> json {
         auto addrs = params.at("addresses");
         bool has_hexrays = init_hexrays_plugin();
@@ -307,7 +289,6 @@ void register_analysis_commands(CommandDispatcher& dispatcher)
                 {"size", (size_t)(f->end_ea - f->start_ea)},
             };
 
-            // Decompile if available
             if (has_hexrays)
             {
                 hexrays_failure_t hf;
@@ -337,9 +318,6 @@ void register_analysis_commands(CommandDispatcher& dispatcher)
         return {{"results", results}, {"count", results.size()}};
     });
 
-    // ---- export_funcs ----
-    // Export function info in JSON format
-    // params: {addresses?: [string], limit?: int}
     dispatcher.register_command("export_funcs", [](const json& params) -> json {
         size_t limit = params.value("limit", 100);
 

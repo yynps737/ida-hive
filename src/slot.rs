@@ -1,9 +1,3 @@
-// slot.rs - Single worker process management
-//
-// Each Slot owns one C++ idalib child process. Communication is via
-// JSON Lines over stdin/stdout. A background tokio task reads all
-// stdout lines and routes responses to waiting callers via oneshot channels.
-
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -21,13 +15,13 @@ use crate::protocol::*;
 
 type PendingMap = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<serde_json::Value>>>>>;
 
-/// A single worker slot — manages one C++ idalib child process
+/// One C++ idalib child process. A background task drains its stdout and routes
+/// each response to the waiting caller by request id.
 pub struct Slot {
     pub id: String,
     pub path: String,
-    /// Private, writable directory for this worker's database files. Unique per
-    /// slot so concurrent opens of the same binary never collide on IDA's
-    /// on-disk database/lock files. Created on start, removed on drop.
+    /// Private database directory, unique per slot so concurrent opens of the same
+    /// binary never collide on IDA's on-disk database and lock files.
     db_dir: PathBuf,
     child: Mutex<Option<Child>>,
     pending: PendingMap,
@@ -53,16 +47,12 @@ impl Slot {
         }
     }
 
-    /// Spawn the C++ worker process and wait (up to `ready_timeout`) for it to
-    /// report ready. Opening a raw binary blocks until initial analysis finishes,
-    /// so the caller passes a generous timeout.
+    /// Spawns the worker and waits up to `ready_timeout` for its ready event.
+    /// Opening a raw binary blocks until IDA's initial analysis finishes.
     pub async fn start(&self, worker_exe: &str, ready_timeout: Duration) -> Result<()> {
         info!(slot = %self.id, path = %self.path, "Starting worker");
         self.dead.store(false, Ordering::SeqCst);
 
-        // Give this worker its own private, writable database directory so it
-        // never writes next to the input and never collides with another worker
-        // opening the same binary.
         tokio::fs::create_dir_all(&self.db_dir).await.map_err(|e| {
             anyhow!("Failed to create db dir {}: {}", self.db_dir.display(), e)
         })?;
@@ -79,7 +69,6 @@ impl Slot {
         let stdout = child.stdout.take().ok_or_else(|| anyhow!("No stdout"))?;
         let stdin = child.stdin.take().ok_or_else(|| anyhow!("No stdin"))?;
 
-        // Stdin writer task
         let (stdin_tx, mut stdin_rx) = mpsc::channel::<String>(64);
         let mut stdin_writer = stdin;
         tokio::spawn(async move {
@@ -92,14 +81,11 @@ impl Slot {
         *self.stdin_tx.lock().await = Some(stdin_tx);
         *self.child.lock().await = Some(child);
 
-        // Read stdout lines
         let reader = BufReader::new(stdout);
         let mut lines = reader.lines();
 
-        // Wait for the worker's "ready" event, bounded by a timeout. A worker
-        // that hangs without emitting output (or closing stdout) must not block
-        // start() forever — and because open() serializes opens, an unbounded
-        // wait here would stall every other open too.
+        // The timeout is load-bearing: open() serializes opens, so a worker that
+        // hangs without output would otherwise stall every other open too.
         let slot_id = self.id.clone();
         let ready = async {
             loop {
@@ -111,9 +97,8 @@ impl Slot {
                                 *self.ready_data.lock().await = Some(evt.data);
                                 return Ok(());
                             }
-                            // Worker reported a fatal startup failure (bad license,
-                            // locked/unreadable file, copy failure, ...). Surface the
-                            // real reason instead of a generic "exited before ready".
+                            // Carries the real failure reason (license, unreadable input,
+                            // copy failure) instead of a generic "exited before ready".
                             Ok(WorkerMessage::Event(evt)) if evt.event == "init_error" => {
                                 let msg = evt.data.get("message").and_then(|v| v.as_str())
                                     .unwrap_or("worker failed to initialize");
@@ -142,7 +127,7 @@ impl Slot {
             )),
         }
 
-        // Spawn background stdout reader task
+        // Steady-state reader: owns `lines` from here on.
         let pending = Arc::clone(&self.pending);
         let dead_flag = Arc::clone(&self.dead);
         let slot_id2 = self.id.clone();
@@ -172,11 +157,10 @@ impl Slot {
                 }
             }
 
-            // Worker stdout closed — process died or exited
+            // `dead` is set before draining; send_command relies on that order.
             warn!(slot = %slot_id2, "Worker stdout closed");
             dead_flag.store(true, Ordering::SeqCst);
 
-            // Fail all pending requests
             let mut map = pending.lock().await;
             for (_, tx) in map.drain() {
                 let _ = tx.send(Err(anyhow!("Worker process died")));
@@ -186,13 +170,13 @@ impl Slot {
         Ok(())
     }
 
-    /// Send a command to the worker and wait for the response (default 120s timeout)
+    /// Sends a command under the default 120s timeout.
     #[allow(dead_code)]
     pub async fn send_command(&self, method: &str, params: serde_json::Value) -> Result<serde_json::Value> {
         self.send_command_with_timeout(method, params, Duration::from_secs(120)).await
     }
 
-    /// Send a command with a custom timeout duration
+    /// Concurrent calls are multiplexed by request id; the worker still answers serially.
     pub async fn send_command_with_timeout(
         &self,
         method: &str,
@@ -205,20 +189,17 @@ impl Slot {
 
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
 
-        // Create oneshot for response
         let (tx, rx) = oneshot::channel();
         self.pending.lock().await.insert(id, tx);
 
-        // Close the death-window: if the worker died between the liveness check
-        // above and this insert, the reader task has already drained `pending`
-        // and our sender would sit unanswered until the full timeout. Re-check
-        // (the reader sets `dead` before draining) and bail immediately.
+        // A worker dying between the check above and this insert would leave the
+        // sender unanswered until the full timeout, since the reader has already
+        // drained `pending`. It sets `dead` first, so re-reading it closes the gap.
         if self.dead.load(Ordering::SeqCst) {
             self.pending.lock().await.remove(&id);
             return Err(anyhow!("Worker is dead"));
         }
 
-        // Send request
         let request = WorkerRequest {
             id,
             method: method.to_string(),
@@ -234,20 +215,19 @@ impl Slot {
             })?;
         }
 
-        // Wait for response with timeout
         let timeout_secs = timeout_dur.as_secs();
         match timeout(timeout_dur, rx).await {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => Err(anyhow!("Response channel dropped (worker died)")),
             Err(_) => {
-                // Timeout — remove from pending
+                // Drop the entry so a late reply is discarded rather than mismatched.
                 self.pending.lock().await.remove(&id);
                 Err(anyhow!("Worker response timeout ({}s)", timeout_secs))
             }
         }
     }
 
-    /// Check if worker process is alive
+    /// Short-circuits on the `dead` flag before reaping the child via try_wait.
     pub async fn is_alive(&self) -> bool {
         if self.dead.load(Ordering::SeqCst) {
             return false;
@@ -259,7 +239,7 @@ impl Slot {
         }
     }
 
-    /// Kill the worker process
+    /// Kills the worker, fails its pending requests, and removes its database dir.
     pub async fn stop(&self) -> Result<()> {
         self.dead.store(true, Ordering::SeqCst);
         let mut child = self.child.lock().await;
@@ -269,7 +249,6 @@ impl Slot {
         *child = None;
         *self.stdin_tx.lock().await = None;
 
-        // Fail all pending
         {
             let mut map = self.pending.lock().await;
             for (_, tx) in map.drain() {
@@ -277,7 +256,6 @@ impl Slot {
             }
         }
 
-        // Remove this worker's private database directory.
         let _ = tokio::fs::remove_dir_all(&self.db_dir).await;
 
         info!(slot = %self.id, "Worker stopped");
@@ -287,10 +265,8 @@ impl Slot {
 
 impl Drop for Slot {
     fn drop(&mut self) {
-        // Backstop cleanup if the slot is dropped without an explicit stop()
-        // (e.g. start() failed). The child is reaped via kill_on_drop; here we
-        // just remove the private database directory. Sync removal is fine — the
-        // directory is small and local.
+        // Backstop for drops without stop(), e.g. a failed start(). kill_on_drop
+        // reaps the child; only the database directory is left to remove.
         let _ = std::fs::remove_dir_all(&self.db_dir);
     }
 }

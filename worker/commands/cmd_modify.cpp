@@ -1,4 +1,3 @@
-// cmd_modify.cpp - Modification commands: rename, set_comment
 #include "../pch.h"
 
 #include <ida.hpp>
@@ -13,7 +12,6 @@
 
 void register_modify_commands(CommandDispatcher& dispatcher)
 {
-    // ---- rename ----
     dispatcher.register_command("rename", [](const json& params) -> json {
         ea_t ea = parse_ea(params.at("ea"));
         std::string new_name = params.at("name").get<std::string>();
@@ -25,7 +23,6 @@ void register_modify_commands(CommandDispatcher& dispatcher)
         return {{"ea", ea_hex(ea)}, {"name", new_name}, {"success", true}};
     });
 
-    // ---- set_comment ----
     dispatcher.register_command("set_comment", [](const json& params) -> json {
         ea_t ea = parse_ea(params.at("ea"));
         std::string comment = params.at("comment").get<std::string>();
@@ -38,7 +35,6 @@ void register_modify_commands(CommandDispatcher& dispatcher)
         return {{"ea", ea_hex(ea)}, {"success", true}};
     });
 
-    // ---- get_name ----
     dispatcher.register_command("get_name", [](const json& params) -> json {
         ea_t ea = parse_ea(params.at("ea"));
 
@@ -48,9 +44,6 @@ void register_modify_commands(CommandDispatcher& dispatcher)
         return {{"ea", ea_hex(ea)}, {"name", name.c_str()}};
     });
 
-    // ---- append_comments ----
-    // Append text to existing comment
-    // params: {ea: string, comment: string, repeatable?: bool}
     dispatcher.register_command("append_comments", [](const json& params) -> json {
         ea_t ea = parse_ea(params.at("ea"));
         std::string text = params.at("comment").get<std::string>();
@@ -68,14 +61,10 @@ void register_modify_commands(CommandDispatcher& dispatcher)
         return {{"ea", ea_hex(ea)}, {"success", ok}};
     });
 
-    // ---- define_func ----
-    // Define a function at address
-    // params: {ea: string, end?: string}
     dispatcher.register_command("define_func", [](const json& params) -> json {
         ea_t ea = parse_ea(params.at("ea"));
         ea_t end = params.contains("end") ? parse_ea(params["end"]) : BADADDR;
 
-        // Check if function already exists
         func_t* existing = get_func(ea);
         if (existing && existing->start_ea == ea)
         {
@@ -104,9 +93,6 @@ void register_modify_commands(CommandDispatcher& dispatcher)
         };
     });
 
-    // ---- define_code ----
-    // Convert bytes to code
-    // params: {ea: string}
     dispatcher.register_command("define_code", [](const json& params) -> json {
         ea_t ea = parse_ea(params.at("ea"));
 
@@ -118,9 +104,6 @@ void register_modify_commands(CommandDispatcher& dispatcher)
         return {{"ea", ea_hex(ea)}, {"size", len}, {"success", true}};
     });
 
-    // ---- undefine ----
-    // Undefine items (convert back to raw bytes)
-    // params: {ea: string, size?: int}
     dispatcher.register_command("undefine", [](const json& params) -> json {
         ea_t ea = parse_ea(params.at("ea"));
         asize_t size = params.value("size", 1);
@@ -131,6 +114,6 @@ void register_modify_commands(CommandDispatcher& dispatcher)
         return {{"ea", ea_hex(ea)}, {"size", size}, {"success", true}};
     });
 
-    // patch_asm not available in C++ idalib — IDA 9.2 has no public C assemble() API.
-    // Use patch_bytes with pre-assembled hex instead.
+    // No patch_asm: IDA 9.2 exposes no public C assemble(). patch_bytes takes
+    // pre-assembled hex instead.
 }

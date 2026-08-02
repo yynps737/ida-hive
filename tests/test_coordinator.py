@@ -31,9 +31,7 @@ MOCK_WORKER = ROOT / "tests" / "mock_worker.py"
 README = ROOT / "README.md"
 
 
-# ---------------------------------------------------------------------------
-# Minimal MCP stdio client (concurrent: responses are matched by request id)
-# ---------------------------------------------------------------------------
+# ---- Minimal MCP stdio client (concurrent: responses are matched by request id) ----
 
 class McpError(RuntimeError):
     pass
@@ -67,7 +65,7 @@ class McpClient:
 
         self._initialize()
 
-    # -- plumbing ----------------------------------------------------------
+    # ---- plumbing ----
 
     def _read_stdout(self):
         for line in self.proc.stdout:
@@ -123,7 +121,7 @@ class McpClient:
         self.server_info = resp["result"]
         self._send({"jsonrpc": "2.0", "method": "notifications/initialized"})
 
-    # -- API ---------------------------------------------------------------
+    # ---- API ----
 
     def list_tools(self):
         return self._request("tools/list", {})["result"]["tools"]
@@ -170,9 +168,7 @@ class McpClient:
         self.close()
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+# ---- Helpers ----
 
 def make_bin(dirpath, name, size=256):
     p = Path(dirpath) / name
@@ -233,9 +229,7 @@ def readme_tools():
     return names, rows, declared_total
 
 
-# ---------------------------------------------------------------------------
-# Test registry
-# ---------------------------------------------------------------------------
+# ---- Test registry ----
 
 TESTS = []
 
@@ -265,9 +259,7 @@ def check(cond, msg):
         raise AssertionError(msg)
 
 
-# ---------------------------------------------------------------------------
-# 1. MCP surface
-# ---------------------------------------------------------------------------
+# ---- 1. MCP surface ----
 
 @test
 def test_initialize_handshake():
@@ -321,9 +313,7 @@ def test_tool_schemas_are_well_formed():
         check("session" not in req, f"{name}: 'session' should be optional (required={req})")
 
 
-# ---------------------------------------------------------------------------
-# 2. Pure-Rust tools (no worker involved)
-# ---------------------------------------------------------------------------
+# ---- 2. Pure-Rust tools (no worker involved) ----
 
 @test
 def test_int_convert():
@@ -374,9 +364,7 @@ def test_server_health_reports_configured_max_slots():
               f"default max_slots should be 100, got {health['max_slots']}")
 
 
-# ---------------------------------------------------------------------------
-# 3. Sessions, routing, dedup
-# ---------------------------------------------------------------------------
+# ---- 3. Sessions, routing, dedup ----
 
 @test
 def test_open_route_and_close():
@@ -519,9 +507,7 @@ def test_workers_exit_when_server_exits():
               f"worker processes leaked after shutdown: {during}")
 
 
-# ---------------------------------------------------------------------------
-# 4. Concurrency
-# ---------------------------------------------------------------------------
+# ---- 4. Concurrency ----
 
 @test
 def test_same_worker_serializes_but_multiplexes_ids():
@@ -624,9 +610,7 @@ def test_concurrent_open_of_same_path_dedups():
         check(len(c.call("list_instances")) == 1, "duplicate slots registered")
 
 
-# ---------------------------------------------------------------------------
-# 4b. Stress & lifecycle edges
-# ---------------------------------------------------------------------------
+# ---- 4b. Stress & lifecycle edges ----
 
 @test
 def test_mixed_high_concurrency_workload():
@@ -713,9 +697,7 @@ def test_paths_with_spaces_and_unicode():
         check(again["slot_id"] == opened["slot_id"], "odd-path dedup failed")
 
 
-# ---------------------------------------------------------------------------
-# 5. Failure modes
-# ---------------------------------------------------------------------------
+# ---- 5. Failure modes ----
 
 @test
 def test_worker_init_error_is_surfaced():
@@ -817,9 +799,7 @@ def test_route_timeout_for_wait_analysis():
         check("11s" in msg, f"timeout error should quote the effective bound: {msg}")
 
 
-# ---------------------------------------------------------------------------
-# 6. batch_convert
-# ---------------------------------------------------------------------------
+# ---- 6. batch_convert ----
 
 @test
 def test_batch_convert():
@@ -862,9 +842,7 @@ def test_batch_convert_reports_per_file_failures():
         check(c.call("list_instances") == [], "failed batch leaked slots")
 
 
-# ---------------------------------------------------------------------------
-# 7. Misc tool plumbing
-# ---------------------------------------------------------------------------
+# ---- 7. Misc tool plumbing ----
 
 @test
 def test_optional_params_are_forwarded():
@@ -922,9 +900,7 @@ def test_nonexistent_path_is_reported():
         check(c.call("list_instances") == [], "failed open left a slot behind")
 
 
-# ---------------------------------------------------------------------------
-# Runner
-# ---------------------------------------------------------------------------
+# ---- Runner ----
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)

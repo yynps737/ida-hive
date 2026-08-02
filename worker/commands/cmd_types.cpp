@@ -1,4 +1,3 @@
-// cmd_types.cpp - Type system commands
 #include "../pch.h"
 
 #include <ida.hpp>
@@ -14,26 +13,20 @@
 
 void register_type_commands(CommandDispatcher& dispatcher)
 {
-    // ---- set_type ----
-    // Apply a type string to an address
-    // params: {ea: string, type: string}
     dispatcher.register_command("set_type", [](const json& params) -> json {
         ea_t ea = parse_ea(params.at("ea"));
         std::string type_str = params.at("type").get<std::string>();
 
-        // apply_cdecl requires a trailing ';'. The tool doc example omits it,
-        // so append one if (ignoring trailing whitespace) it is missing.
+        // apply_cdecl needs the trailing ';' that the documented examples omit.
         std::string cdecl_str = type_str;
         size_t last = cdecl_str.find_last_not_of(" \t\r\n");
         if (last == std::string::npos || cdecl_str[last] != ';')
             cdecl_str += ';';
 
-        // Try apply_cdecl first (handles "int __fastcall func(int a1, int a2)")
         bool ok = apply_cdecl(nullptr, ea, cdecl_str.c_str());
 
         if (!ok)
         {
-            // Fallback: parse as pure type and apply
             tinfo_t tif;
             if (parse_decl(&tif, nullptr, nullptr, type_str.c_str(), PT_SIL))
                 ok = apply_tinfo(ea, tif, TINFO_DEFINITE);
@@ -42,7 +35,6 @@ void register_type_commands(CommandDispatcher& dispatcher)
         if (!ok)
             throw std::runtime_error("Failed to apply type: " + type_str);
 
-        // Read back
         tinfo_t result_tif;
         qstring applied;
         if (get_tinfo(&result_tif, ea))
@@ -51,9 +43,6 @@ void register_type_commands(CommandDispatcher& dispatcher)
         return {{"ea", ea_hex(ea)}, {"type", applied.c_str()}, {"success", true}};
     });
 
-    // ---- type_inspect ----
-    // Get type info at an address or by type name
-    // params: {ea?: string, name?: string}
     dispatcher.register_command("type_inspect", [](const json& params) -> json {
         tinfo_t tif;
 
@@ -77,8 +66,8 @@ void register_type_commands(CommandDispatcher& dispatcher)
         qstring type_str;
         tif.print(&type_str);
 
-        // get_size() returns BADSIZE for function types (and on error);
-        // report null instead of the 0xFFFF... sentinel.
+        // get_size() yields BADSIZE for function types; null keeps the 0xFFFF...
+        // sentinel out of the response.
         asize_t tsize = tif.get_size();
         json size_val = (tif.is_func() || tsize == BADSIZE) ? json(nullptr) : json((size_t)tsize);
 
@@ -93,14 +82,11 @@ void register_type_commands(CommandDispatcher& dispatcher)
         };
     });
 
-    // ---- declare_type ----
-    // Parse and add C type declarations to local type library
-    // params: {decl: string}
     dispatcher.register_command("declare_type", [](const json& params) -> json {
         std::string decl = params.at("decl").get<std::string>();
 
-        // parse_decls returns the number of errors (negative on hard failure),
-        // NOT the number of parsed types.
+        // parse_decls returns an error count, negative on hard failure — never a
+        // count of parsed types.
         int count = parse_decls(nullptr, decl.c_str(), nullptr, HTI_DCL);
         if (count < 0)
             throw std::runtime_error("Failed to parse declaration");
@@ -108,9 +94,6 @@ void register_type_commands(CommandDispatcher& dispatcher)
         return {{"errors", count}, {"parsed", count == 0}, {"success", true}};
     });
 
-    // ---- type_query ----
-    // Search local types by name pattern
-    // params: {filter?: string, limit?: int}
     dispatcher.register_command("type_query", [](const json& params) -> json {
         std::string filter = params.value("filter", std::string{});
         size_t limit = params.value("limit", 50);
@@ -146,9 +129,6 @@ void register_type_commands(CommandDispatcher& dispatcher)
         return {{"types", types}, {"total", count}};
     });
 
-    // ---- search_structs ----
-    // Search struct/union types
-    // params: {filter?: string, limit?: int}
     dispatcher.register_command("search_structs", [](const json& params) -> json {
         std::string filter = params.value("filter", std::string{});
         size_t limit = params.value("limit", 50);
@@ -184,9 +164,6 @@ void register_type_commands(CommandDispatcher& dispatcher)
         return {{"structs", structs}};
     });
 
-    // ---- infer_types ----
-    // Use Hex-Rays to infer types at an address
-    // params: {ea: string}
     dispatcher.register_command("infer_types", [](const json& params) -> json {
         ea_t ea = parse_ea(params.at("ea"));
         func_t* f = get_func(ea);
@@ -201,7 +178,6 @@ void register_type_commands(CommandDispatcher& dispatcher)
         if (!cfunc)
             throw std::runtime_error("Decompilation failed");
 
-        // Extract local variable types
         json vars = json::array();
         lvars_t* lvars = cfunc->get_lvars();
         if (lvars)
@@ -223,15 +199,11 @@ void register_type_commands(CommandDispatcher& dispatcher)
         return {{"ea", ea_hex(f->start_ea)}, {"variables", vars}};
     });
 
-    // ---- enum_upsert ----
-    // Create or extend an enum type
-    // params: {name: string, members: [{name: string, value: int}], bitfield?: bool}
     dispatcher.register_command("enum_upsert", [](const json& params) -> json {
         std::string ename = params.at("name").get<std::string>();
         auto members = params.at("members");
         bool bitfield = params.value("bitfield", false);
 
-        // Build C declaration for the enum
         std::string decl = "enum " + ename + " { ";
         for (size_t i = 0; i < members.size(); i++)
         {
@@ -251,9 +223,6 @@ void register_type_commands(CommandDispatcher& dispatcher)
         return {{"name", ename}, {"members", members.size()}, {"success", true}};
     });
 
-    // ---- read_struct ----
-    // Read struct fields from memory at a given address
-    // params: {ea: string, struct_name: string}
     dispatcher.register_command("read_struct", [](const json& params) -> json {
         ea_t ea = parse_ea(params.at("ea"));
         std::string sname = params.at("struct_name").get<std::string>();
@@ -269,11 +238,9 @@ void register_type_commands(CommandDispatcher& dispatcher)
         if (ssize == 0 || ssize == BADSIZE)
             throw std::runtime_error("Cannot determine struct size");
 
-        // Read raw bytes
         std::vector<uint8_t> data(ssize);
         get_bytes(data.data(), ssize, ea);
 
-        // Get member info via udt
         udt_type_data_t udt;
         if (!tif.get_udt_details(&udt))
             throw std::runtime_error("Cannot get struct details");
@@ -290,7 +257,6 @@ void register_type_commands(CommandDispatcher& dispatcher)
             asize_t moff = m.offset / 8; // bits to bytes
             asize_t msize = m.size / 8;
 
-            // Read value as hex
             std::string hex_val;
             for (asize_t b = 0; b < msize && (moff + b) < ssize; b++)
             {
@@ -311,9 +277,6 @@ void register_type_commands(CommandDispatcher& dispatcher)
         return {{"ea", ea_hex(ea)}, {"struct", sname}, {"size", ssize}, {"fields", fields}};
     });
 
-    // ---- type_apply_batch ----
-    // Apply types to multiple addresses in one call
-    // params: {items: [{ea: string, type: string}]}
     dispatcher.register_command("type_apply_batch", [](const json& params) -> json {
         auto items = params.at("items");
         json results = json::array();
@@ -324,19 +287,15 @@ void register_type_commands(CommandDispatcher& dispatcher)
             ea_t ea = parse_ea(item.at("ea"));
             std::string type_str = item.at("type").get<std::string>();
 
-            // Use the same apply sequence as set_type. apply_cdecl requires a
-            // trailing ';'; append one if (ignoring trailing whitespace) it is
-            // missing, otherwise apply_cdecl fails and nothing is applied.
+            // Same sequence as set_type, including the ';' apply_cdecl requires.
             std::string cdecl_str = type_str;
             size_t last = cdecl_str.find_last_not_of(" \t\r\n");
             if (last == std::string::npos || cdecl_str[last] != ';')
                 cdecl_str += ';';
 
-            // Try apply_cdecl first (handles full C declarations with names)
             bool ok = apply_cdecl(nullptr, ea, cdecl_str.c_str());
             if (!ok)
             {
-                // Fallback: parse as pure type and apply
                 tinfo_t tif;
                 if (parse_decl(&tif, nullptr, nullptr, type_str.c_str(), PT_SIL))
                     ok = apply_tinfo(ea, tif, TINFO_DEFINITE);

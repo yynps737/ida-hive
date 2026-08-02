@@ -1,4 +1,3 @@
-// cmd_search.cpp - Search commands: find_regex, find_bytes, imports, func_query, entity_query
 #include "../pch.h"
 
 #include <ida.hpp>
@@ -18,9 +17,6 @@
 
 void register_search_commands(CommandDispatcher& dispatcher)
 {
-    // ---- find_regex ----
-    // Search strings by regex pattern
-    // params: {pattern: string, limit?: int}
     dispatcher.register_command("find_regex", [](const json& params) -> json {
         std::string pattern_str = params.at("pattern").get<std::string>();
         size_t limit = params.value("limit", 30);
@@ -48,9 +44,6 @@ void register_search_commands(CommandDispatcher& dispatcher)
         return {{"matches", matches}, {"count", matches.size()}};
     });
 
-    // ---- find_bytes ----
-    // Search byte patterns with ?? wildcards
-    // params: {hex: string, start?: string, limit?: int}
     dispatcher.register_command("find_bytes", [](const json& params) -> json {
         std::string hex = params.at("hex").get<std::string>();
         size_t limit = params.value("limit", 10);
@@ -58,7 +51,7 @@ void register_search_commands(CommandDispatcher& dispatcher)
         ea_t start = params.contains("start") ? parse_ea(params["start"]) : inf_get_min_ea();
         ea_t end = inf_get_max_ea();
 
-        // Parse hex + wildcards into compiled_binpat_vec_t
+        // '??' becomes a masked byte in the compiled pattern.
         compiled_binpat_vec_t binpat;
         qstring errbuf;
         parse_binpat_str(&binpat, start, hex.c_str(), 16, PBSENC_DEF1BPU, &errbuf);
@@ -80,9 +73,6 @@ void register_search_commands(CommandDispatcher& dispatcher)
         return {{"matches", results}, {"count", results.size()}};
     });
 
-    // ---- imports ----
-    // List all imports
-    // params: {limit?: int, filter?: string}
     dispatcher.register_command("imports", [](const json& params) -> json {
         size_t limit = params.value("limit", 100);
         std::string filter = params.value("filter", std::string{});
@@ -125,9 +115,6 @@ void register_search_commands(CommandDispatcher& dispatcher)
         return {{"imports", imports}, {"count", imports.size()}, {"modules", mod_count}};
     });
 
-    // ---- func_query ----
-    // Advanced function search with size/name/type filters
-    // params: {filter?, min_size?, max_size?, limit?, offset?}
     dispatcher.register_command("func_query", [](const json& params) -> json {
         std::string filter = params.value("filter", std::string{});
         size_t min_size = params.value("min_size", 0);
@@ -167,9 +154,6 @@ void register_search_commands(CommandDispatcher& dispatcher)
         return {{"functions", funcs}, {"total", total}, {"matched", matched}};
     });
 
-    // ---- list_globals ----
-    // List named addresses (non-function)
-    // params: {filter?, limit?, offset?}
     dispatcher.register_command("list_globals", [](const json& params) -> json {
         std::string filter = params.value("filter", std::string{});
         size_t limit = params.value("limit", 100);
@@ -203,9 +187,6 @@ void register_search_commands(CommandDispatcher& dispatcher)
         return {{"globals", globals}, {"matched", matched}};
     });
 
-    // ---- int_convert ----
-    // Number base conversion utility
-    // params: {value: string}
     dispatcher.register_command("int_convert", [](const json& params) -> json {
         std::string val_str = params.at("value").get<std::string>();
         uint64_t val = std::stoull(val_str, nullptr, 0);
@@ -215,7 +196,6 @@ void register_search_commands(CommandDispatcher& dispatcher)
         qsnprintf(dec_buf, sizeof(dec_buf), "%llu", (unsigned long long)val);
         qsnprintf(oct_buf, sizeof(oct_buf), "0%llo", (unsigned long long)val);
 
-        // Binary
         std::string bin = "0b";
         if (val == 0) { bin += "0"; }
         else {
@@ -235,9 +215,6 @@ void register_search_commands(CommandDispatcher& dispatcher)
         };
     });
 
-    // ---- imports_query ----
-    // Filtered imports with module and pagination
-    // params: {filter?: string, module?: string, offset?: int, limit?: int}
     dispatcher.register_command("imports_query", [](const json& params) -> json {
         std::string filter = params.value("filter", std::string{});
         std::string mod_filter = params.value("module", std::string{});
@@ -280,9 +257,6 @@ void register_search_commands(CommandDispatcher& dispatcher)
         return {{"imports", imports}, {"matched", matched}, {"count", imports.size()}};
     });
 
-    // ---- entity_query ----
-    // Generic entity search across functions, globals, strings, imports
-    // params: {kind: "functions"|"globals"|"strings"|"imports", filter?: string, limit?: int}
     dispatcher.register_command("entity_query", [](const json& params) -> json {
         std::string kind = params.at("kind").get<std::string>();
         std::string filter = params.value("filter", std::string{});

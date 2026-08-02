@@ -1,4 +1,3 @@
-// cmd_composite.cpp - Composite analysis commands that aggregate multiple queries
 #include "../pch.h"
 
 #include <ida.hpp>
@@ -24,9 +23,6 @@
 
 void register_composite_commands(CommandDispatcher& dispatcher)
 {
-    // ---- analyze_function ----
-    // Deep single-function analysis: decompile + disasm + xrefs + strings + callees + basic blocks
-    // params: {ea: string}
     dispatcher.register_command("analyze_function", [](const json& params) -> json {
         ea_t ea = parse_ea(params.at("ea"));
         func_t* f = get_func(ea);
@@ -37,7 +33,6 @@ void register_composite_commands(CommandDispatcher& dispatcher)
         get_func_name(&func_name, f->start_ea);
         size_t fsize = (size_t)(f->end_ea - f->start_ea);
 
-        // Pseudocode
         std::string pseudocode;
         if (init_hexrays_plugin())
         {
@@ -56,7 +51,6 @@ void register_composite_commands(CommandDispatcher& dispatcher)
             }
         }
 
-        // Callers
         json callers = json::array();
         xrefblk_t xb;
         for (bool ok = xb.first_to(f->start_ea, XREF_ALL); ok && callers.size() < 20; ok = xb.next_to())
@@ -69,7 +63,6 @@ void register_composite_commands(CommandDispatcher& dispatcher)
             callers.push_back({{"ea", ea_hex(caller->start_ea)}, {"name", cname.c_str()}});
         }
 
-        // Callees + strings
         json callees = json::array();
         json strings = json::array();
         std::set<ea_t> seen;
@@ -82,7 +75,7 @@ void register_composite_commands(CommandDispatcher& dispatcher)
             {
                 if (xb2.iscode)
                 {
-                    // Only CALL and JUMP xrefs can be callee edges; skip ordinary flow/data.
+                    // fl_F is ordinary fall-through, not an edge in the call graph.
                     bool is_call = (xb2.type == fl_CN || xb2.type == fl_CF);
                     bool is_jump = (xb2.type == fl_JN || xb2.type == fl_JF);
                     if (!is_call && !is_jump) continue;
@@ -90,11 +83,11 @@ void register_composite_commands(CommandDispatcher& dispatcher)
                     func_t* callee = get_func(xb2.to);
                     if (!callee) continue;
 
-                    // A jump is a callee edge only if it targets another function's entry
-                    // (a tail call); jumps to internal labels are control flow, not callees.
+                    // A jump counts only when it lands on another function's entry;
+                    // mid-function targets are internal control flow.
                     if (is_jump && xb2.to != callee->start_ea) continue;
 
-                    // Keep direct-CALL / tail-jump self-edges: they are genuine recursion.
+                    // Genuine self-recursion survives; the self-edge is not spurious.
                     if (seen.insert(callee->start_ea).second)
                     {
                         qstring n;
@@ -119,7 +112,6 @@ void register_composite_commands(CommandDispatcher& dispatcher)
             curr = next_head(curr, f->end_ea);
         }
 
-        // Basic block count
         qflow_chart_t fc;
         fc.create("", f, BADADDR, BADADDR, FC_NOEXT);
 
@@ -135,15 +127,11 @@ void register_composite_commands(CommandDispatcher& dispatcher)
         };
     });
 
-    // ---- survey_binary ----
-    // One-call binary triage overview
-    // params: {}
     dispatcher.register_command("survey_binary", [](const json& params) -> json {
         qstring procname = inf_get_procname();
         size_t func_count = get_func_qty();
         int seg_count = get_segm_qty();
 
-        // Segments
         json segments = json::array();
         for (int i = 0; i < seg_count; i++)
         {
@@ -159,7 +147,6 @@ void register_composite_commands(CommandDispatcher& dispatcher)
             });
         }
 
-        // Top functions by size
         json top_funcs = json::array();
         std::vector<std::pair<size_t, ea_t>> func_sizes;
         for (size_t i = 0; i < func_count; i++)
@@ -179,10 +166,8 @@ void register_composite_commands(CommandDispatcher& dispatcher)
             });
         }
 
-        // Import count
         int import_modules = get_import_module_qty();
 
-        // Top strings
         json top_strings = json::array();
         string_info_t si;
         for (size_t i = 0; get_strlist_item(&si, i) && top_strings.size() < 15; i++)
@@ -195,7 +180,6 @@ void register_composite_commands(CommandDispatcher& dispatcher)
             });
         }
 
-        // Entry points
         json entries = json::array();
         size_t entry_count = get_entry_qty();
         for (size_t i = 0; i < entry_count && entries.size() < 10; i++)
@@ -205,8 +189,8 @@ void register_composite_commands(CommandDispatcher& dispatcher)
             qstring ename;
             get_entry_name(&ename, ord);
             json entry = {{"ea", ea_hex(entry_ea)}, {"name", ename.c_str()}};
-            // For ELF, get_entry_ordinal() returns the entry EA itself (not a real
-            // ordinal), so only expose 'ordinal' when it is a genuine ordinal.
+            // On ELF, get_entry_ordinal() returns the entry EA itself, so the field
+            // is emitted only when it is a real ordinal.
             if ((ea_t)ord != entry_ea)
                 entry["ordinal"] = ord;
             entries.push_back(entry);
@@ -227,9 +211,6 @@ void register_composite_commands(CommandDispatcher& dispatcher)
         };
     });
 
-    // ---- trace_data_flow ----
-    // Follow xrefs forward or backward from an address
-    // params: {ea: string, direction?: "forward"|"backward", depth?: int}
     dispatcher.register_command("trace_data_flow", [](const json& params) -> json {
         ea_t ea = parse_ea(params.at("ea"));
         std::string direction = params.value("direction", std::string("forward"));
@@ -287,9 +268,6 @@ void register_composite_commands(CommandDispatcher& dispatcher)
         return {{"nodes", nodes}, {"edges", edges}};
     });
 
-    // ---- analyze_component ----
-    // Analyze a group of related functions as a component
-    // params: {addresses: [string]}
     dispatcher.register_command("analyze_component", [](const json& params) -> json {
         auto addrs = params.at("addresses");
 
@@ -297,7 +275,6 @@ void register_composite_commands(CommandDispatcher& dispatcher)
         json internal_edges = json::array();
         std::set<ea_t> component_eas;
 
-        // Collect component function addresses
         for (auto& a : addrs)
         {
             ea_t ea = parse_ea(a);
@@ -305,7 +282,6 @@ void register_composite_commands(CommandDispatcher& dispatcher)
             if (f) component_eas.insert(f->start_ea);
         }
 
-        // Analyze each function
         for (ea_t fea : component_eas)
         {
             func_t* f = get_func(fea);
@@ -314,12 +290,10 @@ void register_composite_commands(CommandDispatcher& dispatcher)
             qstring name;
             get_func_name(&name, f->start_ea);
 
-            // Count callers/callees within component
             int internal_callers = 0, external_callers = 0;
             json callees_list = json::array();
             std::set<ea_t> seen_callees;
 
-            // Callers
             xrefblk_t xb;
             for (bool ok = xb.first_to(f->start_ea, XREF_ALL); ok; ok = xb.next_to())
             {
@@ -332,7 +306,6 @@ void register_composite_commands(CommandDispatcher& dispatcher)
                     external_callers++;
             }
 
-            // Callees
             ea_t curr = f->start_ea;
             while (curr < f->end_ea && curr != BADADDR)
             {
@@ -340,16 +313,16 @@ void register_composite_commands(CommandDispatcher& dispatcher)
                 for (bool ok = xb2.first_from(curr, XREF_ALL); ok; ok = xb2.next_from())
                 {
                     if (!xb2.iscode) continue;
-                    // Only CALL and JUMP xrefs can be callee edges; skip ordinary flow/data.
+                    // fl_F is ordinary fall-through, not an edge in the call graph.
                     bool is_call = (xb2.type == fl_CN || xb2.type == fl_CF);
                     bool is_jump = (xb2.type == fl_JN || xb2.type == fl_JF);
                     if (!is_call && !is_jump) continue;
                     func_t* callee = get_func(xb2.to);
                     if (!callee) continue;
-                    // A jump is a callee edge only if it targets another function's entry
-                    // (a tail call); jumps to internal labels are control flow, not callees.
+                    // A jump counts only when it lands on another function's entry;
+                    // mid-function targets are internal control flow.
                     if (is_jump && xb2.to != callee->start_ea) continue;
-                    // Keep self-edges: a direct CALL / tail-jump to self is genuine recursion.
+                    // Genuine self-recursion survives; the self-edge is not spurious.
                     if (!seen_callees.insert(callee->start_ea).second) continue;
 
                     qstring cname;
@@ -388,9 +361,6 @@ void register_composite_commands(CommandDispatcher& dispatcher)
         };
     });
 
-    // ---- diff_before_after ----
-    // Apply an edit (rename/set_type/comment) and show before/after decompilation
-    // params: {ea: string, action: "rename"|"set_type"|"set_comment", value: string}
     dispatcher.register_command("diff_before_after", [](const json& params) -> json {
         ea_t ea = parse_ea(params.at("ea"));
         std::string action = params.at("action").get<std::string>();
@@ -403,7 +373,6 @@ void register_composite_commands(CommandDispatcher& dispatcher)
         if (!init_hexrays_plugin())
             throw std::runtime_error("Hex-Rays required for diff");
 
-        // Decompile BEFORE
         auto decompile_to_string = [](func_t* f) -> std::string {
             hexrays_failure_t hf;
             cfuncptr_t cfunc = decompile(f, &hf);
@@ -422,7 +391,6 @@ void register_composite_commands(CommandDispatcher& dispatcher)
 
         std::string before = decompile_to_string(f);
 
-        // Apply action
         bool applied = false;
         if (action == "rename")
         {
@@ -443,10 +411,9 @@ void register_composite_commands(CommandDispatcher& dispatcher)
             throw std::runtime_error("Unknown action: " + action);
         }
 
-        // Invalidate the cached decompilation so the AFTER pass reflects the edit
+        // Without this the AFTER pass returns the cached pre-edit pseudocode.
         mark_cfunc_dirty(f->start_ea);
 
-        // Decompile AFTER
         std::string after = decompile_to_string(f);
 
         return {

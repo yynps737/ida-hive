@@ -1,11 +1,4 @@
-// worker.cpp - IDA MCP Worker process
-//
-// Headless idalib process that reads JSON commands from stdin,
-// calls IDA SDK APIs, and writes JSON results to stdout.
-//
-// Usage: ida_mcp_worker <binary_or_idb_path>
-
-// nlohmann/json MUST come before IDA headers (pro.h redefines fgetc)
+// Must stay first; see pch.h for the macro collision it works around.
 #include "pch.h"
 
 #include <ida.hpp>
@@ -27,12 +20,8 @@
 #include "commands/cmd_stack.h"
 #include "commands/cmd_composite.h"
 
-// Original input path the AI asked for. Even when we analyze a private copy
-// (or redirect the database elsewhere), this is what save_idb / the ready
-// event report, so the AI always sees the path it provided.
+// Declared in util.h.
 std::string g_original_input;
-
-// This worker's private database directory (argv[2]); empty for manual runs.
 std::string g_db_dir;
 
 int main(int argc, char* argv[])
@@ -44,11 +33,8 @@ int main(int argc, char* argv[])
     }
 
     const char* input_path = argv[1];
-    // Optional: a private, writable directory where THIS worker keeps its
-    // database files. The coordinator hands every worker a unique dir so that
-    // (a) the input file's own directory is never written to, and (b) two
-    // workers can open the SAME binary at once without colliding on IDA's
-    // database/lock files. Empty => legacy in-place behavior (manual runs).
+    // Unique per worker when the coordinator supplies it, which keeps IDA's database
+    // and lock files out of the input's directory. Empty runs in place.
     std::string db_dir = (argc >= 3) ? argv[2] : "";
 
     g_original_input = input_path;
@@ -70,23 +56,19 @@ int main(int argc, char* argv[])
 
     enable_console_messages(false);
 
-    // Detect if input is a pre-analyzed .i64/.idb or a raw binary (case-insensitive).
     std::string path_str(input_path);
     bool is_idb = has_db_extension(path_str);
 
-    // Resolve what we actually hand to open_database and where its database
-    // files land, based on whether the coordinator gave us a private dir.
+    // A database and a raw binary reach the private dir by different routes: the
+    // former is copied into it, the latter redirects its output there.
     std::string open_path = input_path;   // what open_database loads
     std::string open_args;                // IDA CLI args (e.g. -odb)
     if (!db_dir.empty())
     {
         if (is_idb)
         {
-            // A .i64/.idb is itself the database; IDA locks it on open, so two
-            // workers can't share one file. Copy it into our private dir and
-            // open the copy — each worker gets an independent, writable DB.
-            // db_dir is absolute (coordinator-provided), so dest is absolute and
-            // the open is cwd-independent.
+            // IDA locks a database on open, so workers cannot share one file. Each
+            // opens its own copy. db_dir is absolute, so dest is cwd-independent.
             std::string ext = path_str.substr(path_str.size() - 4);
             std::string dest = db_dir + "/db" + ext;
             int crc = qcopyfile(input_path, dest.c_str(), true);
@@ -105,14 +87,9 @@ int main(int argc, char* argv[])
         }
         else
         {
-            // Raw binary: load from the original (absolute) file but redirect the
-            // new database into our private dir. We chdir into the dir and pass a
-            // BARE relative "-odb" rather than "-o<abspath>/db": the args string is
-            // run through IDA's command-line tokenizer (splits on spaces, treats
-            // '\\' as an escape), so an absolute path with a space or a Windows
-            // backslash would be corrupted. "-odb" has no such characters and is
-            // safe on every platform. The input is the positional file_path arg,
-            // which is NOT re-tokenized.
+            // chdir + bare "-odb", never "-o<abspath>/db": IDA re-tokenizes the args
+            // string on spaces and treats '\' as an escape, which corrupts absolute
+            // paths. "-odb" contains neither. The positional input path is exempt.
             if (qchdir(db_dir.c_str()) != 0)
             {
                 send_event("init_error", {
@@ -130,7 +107,8 @@ int main(int argc, char* argv[])
     LOG("Opening %s: %s%s%s", is_idb ? "database" : "binary", input_path,
         open_args.empty() ? "" : " ", open_args.c_str());
 
-    // .i64 = already analyzed, raw binary = start auto-analysis in background
+    // The second argument runs auto-analysis, and does so to completion: for a raw
+    // binary this call is where the minutes go.
     rc = open_database(open_path.c_str(), !is_idb,
                        open_args.empty() ? nullptr : open_args.c_str());
     if (rc != 0)
@@ -145,16 +123,15 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    // For raw binaries, do NOT call auto_wait() here.
-    // Auto-analysis runs in IDA's internal background.
-    // Commands are available immediately; AI can poll analysis_status.
+    // Records that the input was a raw binary, not that analysis is still running —
+    // open_database above already finished it. The coordinator drops this field from
+    // list_instances for that reason.
     bool analyzing = !is_idb;
     if (analyzing)
     {
-        LOG("Auto-analysis started in background (not blocking)");
+        LOG("Initial auto-analysis complete");
     }
 
-    // Build the command dispatcher
     CommandDispatcher dispatcher;
 
     register_core_commands(dispatcher);
@@ -167,24 +144,20 @@ int main(int argc, char* argv[])
     register_stack_commands(dispatcher);
     register_composite_commands(dispatcher);
 
-    // Health check
     dispatcher.register_command("ping", [](const json& params) -> json {
         return {{"pong", true}};
     });
 
-    // Shutdown
+    // Faking EOF ends dispatcher.run(), which unwinds main() and closes the database.
     dispatcher.register_command("shutdown", [](const json& params) -> json {
         std::cin.setstate(std::ios_base::eofbit);
         return {{"shutdown", true}};
     });
 
-    // ---- analysis_status (non-blocking) ----
-    // Returns current auto-analysis state without blocking.
-    // AI polls this to know when a raw binary is fully analyzed.
+    // Never blocks. Reports done immediately unless a later analysis pass was queued.
     dispatcher.register_command("analysis_status", [](const json& params) -> json {
         bool done = auto_is_ok();
 
-        // get_auto_display gives us the current analysis address and queue type
         auto_display_t ad{};
         bool has_display = get_auto_display(&ad);
 
@@ -196,7 +169,7 @@ int main(int argc, char* argv[])
 
         if (!done && has_display)
         {
-            // Map atype_t to human-readable queue name
+            // atype_t: which analysis queue is being drained.
             const char* state_name = "unknown";
             switch (ad.type)
             {
@@ -220,7 +193,7 @@ int main(int argc, char* argv[])
             result["state"]      = state_name;
             result["current_ea"] = ea_hex(ad.ea);
 
-            // Map idastate_t
+            // idastate_t: what the kernel itself is doing.
             const char* ida_state = "unknown";
             switch (ad.state)
             {
@@ -236,10 +209,9 @@ int main(int argc, char* argv[])
         return result;
     });
 
-    // ---- wait_analysis (blocking with timeout + progress events) ----
-    // Blocks until auto-analysis completes or timeout is reached.
-    // Sends periodic "analysis_progress" events to coordinator.
-    // params: {max_seconds?: int}  default=300, max=600
+    // Blocks until analysis settles or max_seconds elapses (default 300, capped 600),
+    // emitting analysis_progress events meanwhile. Returns at once in the common case,
+    // since open_database already ran the initial pass.
     dispatcher.register_command("wait_analysis", [](const json& params) -> json {
         if (auto_is_ok())
         {
@@ -262,7 +234,6 @@ int main(int argc, char* argv[])
 
         while (true)
         {
-            // Poll auto_is_ok — non-blocking check
             if (auto_is_ok())
             {
                 double elapsed = std::chrono::duration<double>(
@@ -283,7 +254,6 @@ int main(int argc, char* argv[])
                 };
             }
 
-            // Check timeout
             double elapsed = std::chrono::duration<double>(
                 std::chrono::steady_clock::now() - start).count();
             if (elapsed >= max_seconds)
@@ -297,7 +267,6 @@ int main(int argc, char* argv[])
                 };
             }
 
-            // Send progress event every 2 seconds
             int current_sec = (int)elapsed;
             if (current_sec >= last_report + 2)
             {
@@ -316,12 +285,12 @@ int main(int argc, char* argv[])
                 send_event("analysis_progress", progress);
             }
 
-            // Sleep 500ms between polls — cooperative, not busy-wait
+            // Yields rather than spinning; the analysis owns this thread otherwise.
             qsleep(500);
         }
     });
 
-    // Signal ready to coordinator
+    // The coordinator's start() blocks on this event.
     size_t func_count = get_func_qty();
     int seg_count = get_segm_qty();
     qstring procname = inf_get_procname();

@@ -1,4 +1,3 @@
-// cmd_graph.cpp - Graph/CFG commands: basic_blocks, callgraph, insn_query
 #include "../pch.h"
 
 #include <ida.hpp>
@@ -19,9 +18,6 @@
 
 void register_graph_commands(CommandDispatcher& dispatcher)
 {
-    // ---- basic_blocks ----
-    // Get control flow graph basic blocks for a function
-    // params: {ea: string}
     dispatcher.register_command("basic_blocks", [](const json& params) -> json {
         ea_t ea = parse_ea(params.at("ea"));
         func_t* f = get_func(ea);
@@ -64,9 +60,6 @@ void register_graph_commands(CommandDispatcher& dispatcher)
         };
     });
 
-    // ---- callgraph ----
-    // Build bounded call graph from root functions
-    // params: {roots: [string], depth?: int}
     dispatcher.register_command("callgraph", [](const json& params) -> json {
         auto roots = params.at("roots");
         int max_depth = params.value("depth", 3);
@@ -75,7 +68,7 @@ void register_graph_commands(CommandDispatcher& dispatcher)
         json edges = json::array();
         std::set<ea_t> visited;
 
-        // BFS
+        // Breadth-first so the depth cap trims whole levels, not arbitrary paths.
         struct QueueItem { ea_t ea; int depth; };
         std::queue<QueueItem> q;
 
@@ -108,7 +101,6 @@ void register_graph_commands(CommandDispatcher& dispatcher)
 
             if (depth >= max_depth) continue;
 
-            // Find callees
             std::set<ea_t> seen;
             ea_t curr = f->start_ea;
             while (curr < f->end_ea && curr != BADADDR)
@@ -117,17 +109,17 @@ void register_graph_commands(CommandDispatcher& dispatcher)
                 for (bool ok = xb.first_from(curr, XREF_ALL); ok; ok = xb.next_from())
                 {
                     if (!xb.iscode) continue;
-                    // Consider only CALLs and JUMPs; skip ordinary flow (fl_F) etc.
+                    // fl_F is ordinary fall-through, not an edge in the call graph.
                     bool is_call = (xb.type == fl_CN || xb.type == fl_CF);
                     bool is_jump = (xb.type == fl_JN || xb.type == fl_JF);
                     if (!is_call && !is_jump) continue;
 
                     func_t* callee = get_func(xb.to);
                     if (!callee) continue;
-                    // A jump is a call edge only if it tail-calls another function's
-                    // entry; mid-function jumps are internal control flow.
+                    // A jump counts only when it lands on another function's entry;
+                    // mid-function targets are internal control flow.
                     if (is_jump && xb.to != callee->start_ea) continue;
-                    // Keep direct-call/tail-jump self-recursion (real callee).
+                    // Genuine self-recursion survives; the self-edge is not spurious.
                     if (!seen.insert(callee->start_ea).second) continue;
 
                     edges.push_back({
@@ -145,9 +137,6 @@ void register_graph_commands(CommandDispatcher& dispatcher)
         return {{"nodes", nodes}, {"edges", edges}};
     });
 
-    // ---- insn_query ----
-    // Search instructions by mnemonic/operand within a function or range
-    // params: {mnemonic?: string, ea?: string, limit?: int}
     dispatcher.register_command("insn_query", [](const json& params) -> json {
         std::string mnemonic = params.value("mnemonic", std::string{});
         size_t limit = params.value("limit", 50);
@@ -201,9 +190,6 @@ void register_graph_commands(CommandDispatcher& dispatcher)
         return {{"instructions", results}, {"count", results.size()}};
     });
 
-    // ---- func_profile ----
-    // Quick function summary: size, callees, callers, strings
-    // params: {ea: string}
     dispatcher.register_command("func_profile", [](const json& params) -> json {
         ea_t ea = parse_ea(params.at("ea"));
         func_t* f = get_func(ea);
@@ -214,13 +200,11 @@ void register_graph_commands(CommandDispatcher& dispatcher)
         get_func_name(&name, f->start_ea);
         size_t fsize = (size_t)(f->end_ea - f->start_ea);
 
-        // Count callers
         int caller_count = 0;
         xrefblk_t xb;
         for (bool ok = xb.first_to(f->start_ea, XREF_ALL); ok; ok = xb.next_to())
             if (xb.iscode) caller_count++;
 
-        // Collect callees + strings
         json callees = json::array();
         json strings = json::array();
         std::set<ea_t> seen_callees;
@@ -233,17 +217,17 @@ void register_graph_commands(CommandDispatcher& dispatcher)
             {
                 if (xb2.iscode)
                 {
-                    // Consider only CALLs and JUMPs; skip ordinary flow (fl_F) etc.
+                    // fl_F is ordinary fall-through, not an edge in the call graph.
                     bool is_call = (xb2.type == fl_CN || xb2.type == fl_CF);
                     bool is_jump = (xb2.type == fl_JN || xb2.type == fl_JF);
                     if (!is_call && !is_jump) continue;
 
                     func_t* callee = get_func(xb2.to);
                     if (!callee) continue;
-                    // A jump is a call edge only if it tail-calls another function's
-                    // entry; mid-function jumps are internal control flow.
+                    // A jump counts only when it lands on another function's entry;
+                    // mid-function targets are internal control flow.
                     if (is_jump && xb2.to != callee->start_ea) continue;
-                    // Keep direct-call/tail-jump self-recursion (real callee).
+                    // Genuine self-recursion survives; the self-edge is not spurious.
                     if (seen_callees.insert(callee->start_ea).second)
                     {
                         qstring cname;
@@ -253,7 +237,6 @@ void register_graph_commands(CommandDispatcher& dispatcher)
                 }
                 else
                 {
-                    // Check if data ref points to a string
                     size_t slen = get_max_strlit_length(xb2.to, STRTYPE_C);
                     if (slen > 2 && strings.size() < 20)
                     {

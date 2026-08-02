@@ -1,4 +1,3 @@
-// cmd_memory.cpp - Memory read/write commands
 #include "../pch.h"
 
 #include <ida.hpp>
@@ -12,7 +11,6 @@
 
 void register_memory_commands(CommandDispatcher& dispatcher)
 {
-    // ---- get_bytes ----
     dispatcher.register_command("get_bytes", [](const json& params) -> json {
         ea_t ea = parse_ea(params.at("ea"));
         size_t size = params.at("size").get<size_t>();
@@ -25,7 +23,6 @@ void register_memory_commands(CommandDispatcher& dispatcher)
         if (got < 0)
             throw std::runtime_error("Failed to read bytes");
 
-        // Return as hex string
         std::string hex;
         hex.reserve(got * 2);
         for (ssize_t i = 0; i < got; i++)
@@ -38,7 +35,6 @@ void register_memory_commands(CommandDispatcher& dispatcher)
         return {{"ea", ea_hex(ea)}, {"hex", hex}, {"size", got}};
     });
 
-    // ---- patch_bytes ----
     dispatcher.register_command("patch_bytes", [](const json& params) -> json {
         ea_t ea = parse_ea(params.at("ea"));
         std::string hex = params.at("hex").get<std::string>();
@@ -60,7 +56,6 @@ void register_memory_commands(CommandDispatcher& dispatcher)
         return {{"ea", ea_hex(ea)}, {"patched", size}};
     });
 
-    // ---- get_string ----
     dispatcher.register_command("get_string", [](const json& params) -> json {
         ea_t ea = parse_ea(params.at("ea"));
 
@@ -78,9 +73,6 @@ void register_memory_commands(CommandDispatcher& dispatcher)
         };
     });
 
-    // ---- get_int ----
-    // Read an integer value at address
-    // params: {ea: string, size?: int}  (size: 1/2/4/8 bytes)
     dispatcher.register_command("get_int", [](const json& params) -> json {
         ea_t ea = parse_ea(params.at("ea"));
         int size = params.value("size", 4);
@@ -98,9 +90,6 @@ void register_memory_commands(CommandDispatcher& dispatcher)
         return {{"ea", ea_hex(ea)}, {"value", val}, {"hex", ea_hex(val)}, {"size", size}};
     });
 
-    // ---- put_int ----
-    // Write an integer value at address
-    // params: {ea: string, value: int|string, size?: int}
     dispatcher.register_command("put_int", [](const json& params) -> json {
         ea_t ea = parse_ea(params.at("ea"));
         int size = params.value("size", 4);
@@ -123,9 +112,6 @@ void register_memory_commands(CommandDispatcher& dispatcher)
         return {{"ea", ea_hex(ea)}, {"value", val}, {"size", size}, {"success", true}};
     });
 
-    // ---- get_global_value ----
-    // Read a global variable by name or address
-    // params: {target: string}
     dispatcher.register_command("get_global_value", [](const json& params) -> json {
         std::string target = params.at("target").get<std::string>();
 
@@ -136,20 +122,18 @@ void register_memory_commands(CommandDispatcher& dispatcher)
         if (ea == BADADDR)
             throw std::runtime_error("Not found: " + target);
 
-        // Get type info to determine size
         tinfo_t tif;
         asize_t vsize = 0;
         if (get_tinfo(&tif, ea))
             vsize = tif.get_size();
         if (vsize == 0 || vsize == BADSIZE)
         {
-            // No type (or unknown size): size the read from the item itself
+            // Falls back to the item's own extent when the type carries no size.
             asize_t isz = get_item_size(ea);
             vsize = (isz != 0) ? isz : 8;
         }
         if (vsize > 64) vsize = 64;
 
-        // Read bytes
         std::vector<uint8_t> buf(vsize);
         get_bytes(buf.data(), vsize, ea);
 
@@ -161,7 +145,6 @@ void register_memory_commands(CommandDispatcher& dispatcher)
             hex += h;
         }
 
-        // Read as integer if small enough
         uint64_t int_val = 0;
         if (vsize <= 8)
         {

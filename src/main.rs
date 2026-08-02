@@ -1,15 +1,3 @@
-// main.rs - IDA MCP Server entry point
-//
-// Multi-instance IDA MCP server:
-// - Rust coordinator manages up to 100 C++ idalib worker processes
-// - Each worker loads one .i64/.idb database or one raw binary in headless mode
-// - MCP tools route requests to the correct worker by session
-//
-// Usage: ida-hive
-// Environment:
-//   IDA_MCP_WORKER_EXE  — path to the ida_mcp_worker executable
-//   IDA_MCP_MAX_SLOTS   — max concurrent workers (default 100)
-
 mod coordinator;
 mod protocol;
 mod slot;
@@ -27,7 +15,7 @@ use tools::IdaMcpServer;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Logs to stderr — stdout is reserved for MCP protocol
+    // stdout carries the MCP stream; logs go to stderr.
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::builder()
@@ -45,9 +33,8 @@ async fn main() -> Result<()> {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(100);
-    // How long to wait for a worker to become ready. Opening a raw binary blocks
-    // until IDA's initial analysis finishes, which can take minutes on very large
-    // inputs, so default generously and let it be overridden.
+    // Bounds the wait for worker readiness. Opening a raw binary blocks until IDA's
+    // initial analysis finishes, which runs to minutes on large inputs.
     let open_timeout_secs: u64 = std::env::var("IDA_MCP_OPEN_TIMEOUT")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -64,13 +51,11 @@ async fn main() -> Result<()> {
     let coordinator = Arc::new(Coordinator::new(config));
     let server = IdaMcpServer::new(coordinator);
 
-    // Serve MCP protocol over stdio
     let transport = rmcp::transport::io::stdio();
     let server_handle = server.serve(transport).await?;
 
     info!("MCP server running on stdio");
 
-    // Block until client disconnects
     let quit_reason = server_handle.waiting().await?;
     info!("Server quit: {:?}", quit_reason);
 

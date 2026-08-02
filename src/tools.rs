@@ -1,14 +1,7 @@
-// tools.rs - MCP tool definitions (rmcp 3.x / spec 2026-07-28)
-//
-// Each tool is a thin wrapper that routes to the correct C++ worker via
-// the Coordinator. Tools accept a `session` parameter to identify which
-// worker slot to target.
-//
-// rmcp 3.x moves from 0.1's inline `#[tool(param)]` arguments to typed
-// parameter structs passed via `Parameters<T>`. Each struct derives
-// `Deserialize` (to read the JSON arguments) and `schemars::JsonSchema` (to
-// publish the tool's input schema). Optional fields carry `#[serde(default)]`
-// so an omitted argument deserializes to `None` rather than erroring.
+// Tool arguments arrive as typed structs via `Parameters<T>`, the rmcp 3.x form
+// that replaced 0.1's inline `#[tool(param)]`. Each struct derives `Deserialize`
+// to read the JSON and `schemars::JsonSchema` to publish the input schema, and
+// marks optional fields `#[serde(default)]` so an omitted argument yields None.
 
 use std::sync::Arc;
 
@@ -24,12 +17,12 @@ use crate::coordinator::Coordinator;
 #[derive(Clone)]
 pub struct IdaMcpServer {
     pub coordinator: Arc<Coordinator>,
-    // Read by the #[tool_handler]-generated dispatch, not by hand-written code.
+    // Read by the #[tool_handler]-generated dispatch, never by hand.
     #[allow(dead_code)]
     tool_router: ToolRouter<IdaMcpServer>,
 }
 
-// Helper: route a command to a worker by session.
+// Every tool body funnels through here.
 async fn route(
     coordinator: &Coordinator,
     session: Option<String>,
@@ -43,10 +36,8 @@ async fn route(
     }
 }
 
-// ============================================================================
-// Parameter structs
-// ============================================================================
-// Two shapes are shared across many tools; the rest are per-tool.
+// ---- Parameter structs ----
+// The two below are shared across many tools; the rest are per-tool.
 
 /// Just a session selector (for whole-database queries).
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -566,9 +557,7 @@ pub struct BatchConvertReq {
     pub max_analysis_seconds: Option<i64>,
 }
 
-// ============================================================================
-// Tools
-// ============================================================================
+// ---- Tools ----
 
 #[tool_router]
 impl IdaMcpServer {
@@ -752,9 +741,8 @@ impl IdaMcpServer {
 
     #[tool(description = "Convert a number between hex/decimal/octal/binary representations")]
     async fn int_convert(&self, Parameters(IntConvertReq { value }): Parameters<IntConvertReq>) -> String {
-        // Pure number-conversion utility: compute directly in Rust, no worker/session needed.
-        // Matches the worker's int_convert output shape (cmd_search.cpp): base-0 radix
-        // detection (0x.. hex, 0.. octal, else decimal) into a u64.
+        // Needs no worker, so it never opens a session. The output shape mirrors the
+        // worker's int_convert in cmd_search.cpp, including base-0 radix detection.
         let s = value.trim();
         let parsed: Option<u64> = if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
             u64::from_str_radix(hex, 16).ok()
@@ -1085,8 +1073,8 @@ impl IdaMcpServer {
 impl ServerHandler for IdaMcpServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-            // Not Implementation::from_build_env(): its env! resolves at rmcp's
-            // crate, reporting "rmcp"/its version. Build ours explicitly.
+            // from_build_env() would resolve env! inside rmcp's own crate and report
+            // rmcp's name and version instead of this one's.
             .with_server_info(Implementation::new(
                 env!("CARGO_PKG_NAME"),
                 env!("CARGO_PKG_VERSION"),

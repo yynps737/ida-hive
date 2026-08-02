@@ -1,7 +1,5 @@
-// util.h - IDA-safe utility functions
-//
-// IDA SDK redefines snprintf/fprintf/stderr via macros.
-// Use these helpers instead.
+// The IDA SDK macro-redefines snprintf/fprintf/stderr, so these helpers wrap the
+// q-prefixed SDK equivalents instead.
 
 #pragma once
 
@@ -16,19 +14,16 @@
 
 using json = nlohmann::json;
 
-// Original input path the worker was launched with (defined in worker.cpp).
-// Used as the default save location, since the live database may be a private
-// copy in a temp dir rather than the path the AI actually provided.
+// The launch path, and the default save target. The live database is usually a
+// private copy in a temp dir, not the path the caller gave. Defined in worker.cpp.
 extern std::string g_original_input;
 
-// This worker's private database directory (defined in worker.cpp). Empty for
-// legacy in-place manual runs. Used to derive a unique temp name when saving.
+// This worker's private database directory, empty for in-place manual runs.
+// Defined in worker.cpp.
 extern std::string g_db_dir;
 
-// True if the path ends with a case-INSENSITIVE .i64/.idb extension. Used to
-// decide raw-binary vs database handling; case-insensitive so an uppercase
-// .I64 on a case-insensitive filesystem still takes the database path and is
-// not mis-handled as a raw binary.
+// Selects database over raw-binary handling. The comparison is case-insensitive so
+// an uppercase .I64 is not mistaken for a raw binary.
 inline bool has_db_extension(const std::string& p)
 {
     if (p.size() < 4) return false;
@@ -37,7 +32,6 @@ inline bool has_db_extension(const std::string& p)
     return e == ".i64" || e == ".idb";
 }
 
-// Format ea_t as hex string "0x..."
 inline std::string ea_hex(ea_t ea)
 {
     char buf[32];
@@ -45,28 +39,25 @@ inline std::string ea_hex(ea_t ea)
     return buf;
 }
 
-// Log to stderr (IDA-safe)
+// stderr only; stdout carries the protocol.
 #define LOG(fmt, ...) qeprintf("[worker] " fmt "\n", ##__VA_ARGS__)
 
-// Resolve a symbol name to an address using the same broad set of tiers as
-// lookup_func, so decompile(ea="malloc") works wherever lookup_func("malloc")
-// does. Returns BADADDR if nothing matches.
+// Resolves a symbol name, matching lookup_func's tiers so decompile(ea="malloc")
+// works wherever lookup_func("malloc") does. Returns BADADDR on no match.
 //
-// Many libc/exported names are reachable only via a non-primary tier: the
-// address at 'malloc' may carry the primary name '__libc_malloc', and weak
-// aliases like 'printf' may not be the registered name at all. Tiers are tried
-// in priority order so a primary-name match always wins when present.
+// The tiers are tried in the order below, strongest first. Many libc names are
+// reachable only through a weaker one: the address at 'malloc' may carry the
+// primary name '__libc_malloc', and an alias like 'printf' may be registered
+// nowhere.
 inline ea_t resolve_name_ea(const std::string& s)
 {
-    // 2. Primary/registered name.
+    // Primary/registered name.
     ea_t e = get_name_ea(BADADDR, s.c_str());
     if (e != BADADDR)
         return e;
 
-    // Helper: does 'name' equal 's' after stripping any stack of known glibc
-    // decoration prefixes? glibc exports stack decorations arbitrarily, e.g.
-    // free -> __libc_free -> __GI___libc_free, so a fixed prefix list cannot be
-    // enumerated. Instead, peel known prefixes off 'name' and check for 's'.
+    // glibc stacks decorations arbitrarily (free -> __libc_free -> __GI___libc_free),
+    // so the combinations cannot be enumerated. Peeling instead terminates on any depth.
     auto matches_decorated = [&s](const char* name) -> bool {
         if (name == nullptr) return false;
         std::string cur = name;
@@ -91,9 +82,8 @@ inline ea_t resolve_name_ea(const std::string& s)
         return false;
     };
 
-    // 3. Scan the name list: exact match on the raw or demangled/short name,
-    //    then a decoration-stripped match (so 'free' resolves to the address
-    //    whose primary name is '__GI___libc_free', etc.).
+    // Name list, exact on the raw or demangled name. A decoration-stripped hit is
+    // only remembered here, never returned, so an exact match later still wins.
     size_t n = get_nlist_size();
     ea_t decorated_hit = BADADDR;
     for (size_t i = 0; i < n; i++)
@@ -109,7 +99,7 @@ inline ea_t resolve_name_ea(const std::string& s)
             decorated_hit = a;
     }
 
-    // 4. Entry-point table: exact match on the export name.
+    // Entry-point table, exact on the export name.
     size_t eq = get_entry_qty();
     for (size_t i = 0; i < eq; i++)
     {
@@ -123,15 +113,14 @@ inline ea_t resolve_name_ea(const std::string& s)
         }
     }
 
-    // 5. Fall back to a decoration-stripped name-list hit (lower priority than
-    //    any exact/entry match above).
+    // Weakest tier: the decoration-stripped hit held back above.
     if (decorated_hit != BADADDR)
         return decorated_hit;
 
     return BADADDR;
 }
 
-// Parse address from JSON value (hex string or integer)
+// Accepts an integer, a numeric string, or a symbol name.
 inline ea_t parse_ea(const json& val)
 {
     if (val.is_string())
@@ -139,7 +128,7 @@ inline ea_t parse_ea(const json& val)
         std::string s = val.get<std::string>();
         try
         {
-            // 1. Numeric fast-path (hex/decimal).
+            // Base 0: "0x" reads as hex, a leading "0" as octal, otherwise decimal.
             return (ea_t)std::stoull(s, nullptr, 0);
         }
         catch (...)

@@ -1,14 +1,13 @@
-// protocol.h - JSON-RPC protocol between Rust coordinator and C++ worker
-//
-// Wire format: JSON Lines over stdin/stdout (one JSON object per line)
+// Wire format between the Rust coordinator and this worker: JSON Lines over
+// stdin/stdout, one object per line. Envelopes are JSON-RPC-shaped but carry no
+// `jsonrpc` field; only the reserved error codes are borrowed.
 //
 // Request:  {"id": 1, "method": "decompile", "params": {"ea": "0x1400010A0"}}
 // Response: {"id": 1, "result": {...}}
 // Error:    {"id": 1, "error": {"code": -1, "message": "..."}}
 // Event:    {"event": "ready", "data": {...}}  (no id, worker-initiated)
 //
-// IMPORTANT: This file must be included AFTER pch.h and IDA headers.
-//            parse_ea / ea_hex helpers are in util.h.
+// Include after pch.h and the IDA headers. parse_ea / ea_hex live in util.h.
 
 #pragma once
 
@@ -16,7 +15,6 @@
 
 using json = nlohmann::json;
 
-// Command handler signature: takes params, returns result JSON
 using CommandHandler = std::function<json(const json& params)>;
 
 class CommandDispatcher
@@ -27,7 +25,7 @@ public:
         handlers_[method] = std::move(handler);
     }
 
-    // Main loop: read stdin, dispatch, write stdout
+    // Single-threaded: a slow handler blocks every later request on this worker.
     void run()
     {
         std::string line;
@@ -76,7 +74,6 @@ public:
                 };
             }
 
-            // Write response as single line + flush
             std::cout << response.dump() << "\n" << std::flush;
         }
     }
@@ -85,7 +82,7 @@ private:
     std::unordered_map<std::string, CommandHandler> handlers_;
 };
 
-// Helper: send an event (no id) to coordinator
+// Unsolicited message to the coordinator, outside the request/response flow.
 inline void send_event(const std::string& event_name, const json& data = {})
 {
     json event = {{"event", event_name}, {"data", data}};

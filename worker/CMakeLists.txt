@@ -26,12 +26,11 @@ else()
     message(FATAL_ERROR "Could not locate ida-cmake bootstrap under: ${_ida_sdk_bootstrap_root}")
 endif()
 
-# bootstrap normalizes the public GitHub SDK layout to .../src. Mirror that
-# back into the cache so re-configures keep using the canonical tree.
+# bootstrap normalizes the public SDK layout to .../src; the cache must follow or
+# a re-configure resolves against the pre-normalized tree.
 set(IDASDK "$ENV{IDASDK}" CACHE PATH "Path to the IDA SDK root" FORCE)
 find_package(idasdk REQUIRED)
 
-# Worker executable — idalib headless
 ida_add_idalib(ida_mcp_worker
     TYPE EXECUTABLE
     SOURCES
@@ -47,7 +46,7 @@ ida_add_idalib(ida_mcp_worker
         commands/cmd_composite.cpp
 )
 
-# nlohmann/json — header-only, fetch via CMake
+# Header-only, so no install step is needed.
 include(FetchContent)
 FetchContent_Declare(
     json

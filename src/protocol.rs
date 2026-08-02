@@ -1,9 +1,7 @@
-// protocol.rs - JSON-RPC protocol types for worker communication
-
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
-/// Request sent to a C++ worker (JSON Lines over stdin)
+/// Request to a worker, one JSON object per stdin line.
 #[derive(Debug, Serialize)]
 pub struct WorkerRequest {
     pub id: u64,
@@ -11,8 +9,7 @@ pub struct WorkerRequest {
     pub params: Value,
 }
 
-/// Message received from a C++ worker (JSON Lines over stdout)
-/// Either a response (has "id") or an event (has "event")
+/// Message from a worker, one JSON object per stdout line.
 #[derive(Debug)]
 pub enum WorkerMessage {
     Response(WorkerResponse),
@@ -26,7 +23,7 @@ impl<'de> Deserialize<'de> for WorkerMessage {
     {
         let v = Value::deserialize(deserializer)?;
 
-        // Distinguish by field presence: "id" → Response, "event" → Event
+        // The variant is untagged; `id` and `event` are mutually exclusive on the wire.
         if v.get("id").is_some() {
             let resp: WorkerResponse =
                 serde_json::from_value(v).map_err(serde::de::Error::custom)?;
@@ -54,14 +51,13 @@ pub struct WorkerResponse {
 
 #[derive(Debug, Deserialize)]
 pub struct WorkerError {
-    // Part of the worker's error wire format; the coordinator surfaces `message`
-    // and does not currently act on the numeric code. Kept for protocol fidelity.
+    // Parsed for wire fidelity; only `message` is surfaced.
     #[allow(dead_code)]
     pub code: i64,
     pub message: String,
 }
 
-/// Worker-initiated event (no id field)
+/// Worker-initiated event, carrying no `id`.
 #[derive(Debug, Deserialize)]
 pub struct WorkerEvent {
     pub event: String,

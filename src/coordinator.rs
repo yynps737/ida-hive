@@ -1,5 +1,3 @@
-// coordinator.rs - Manages a pool of worker slots
-
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -10,15 +8,11 @@ use tracing::{info, warn};
 
 use crate::slot::Slot;
 
-/// Configuration for the coordinator
 pub struct CoordinatorConfig {
-    /// Path to the C++ worker executable
     pub worker_exe: String,
-    /// Maximum number of concurrent slots
     pub max_slots: usize,
-    /// How long to wait for a worker to become ready. Opening a raw binary blocks
-    /// until IDA's initial auto-analysis finishes, which on very large inputs can
-    /// take minutes — so this is generous. It only fails truly-hung workers.
+    /// Bounds worker startup. Opening a raw binary blocks until IDA's initial
+    /// auto-analysis finishes, so this is sized to fail only hung workers.
     pub open_timeout: Duration,
 }
 
@@ -32,18 +26,14 @@ impl Default for CoordinatorConfig {
     }
 }
 
-/// Manages multiple worker slots
 pub struct Coordinator {
     config: CoordinatorConfig,
-    /// session_id -> slot mapping
+    /// Session id → slot. Several sessions may share one slot.
     sessions: RwLock<HashMap<String, Arc<Slot>>>,
-    /// All active slots
     slots: RwLock<Vec<Arc<Slot>>>,
-    /// Per-canonical-path locks. Opens of the SAME binary serialize (so they
-    /// dedup to one worker) while opens of DIFFERENT binaries run concurrently.
-    /// A single global lock would serialize ALL opens — and since open blocks
-    /// until initial analysis finishes, one large binary would stall every other
-    /// open across all sessions.
+    /// Keyed by canonical path, so opens of the same binary serialize into one
+    /// worker while opens of different binaries stay parallel. A global lock would
+    /// stall the whole pool behind one large binary's analysis.
     path_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
 }
 
@@ -57,15 +47,13 @@ impl Coordinator {
         }
     }
 
-    /// The configured maximum number of concurrent worker slots. This is the
-    /// same limit `open()` enforces, so `server_health` reports the real cap
-    /// instead of a hardcoded constant.
+    /// The same cap `open()` enforces.
     pub fn max_slots(&self) -> usize {
         self.config.max_slots
     }
 
-    /// Get (or create) the per-path lock for a canonical path, pruning entries
-    /// no longer referenced by any in-flight open so the map stays bounded.
+    /// Interns the lock for a path. Entries held only by the map are dropped first,
+    /// which bounds it to the opens currently in flight.
     async fn lock_for_path(&self, path: &str) -> Arc<Mutex<()>> {
         let mut map = self.path_locks.lock().await;
         map.retain(|_, v| Arc::strong_count(v) > 1);
@@ -74,29 +62,22 @@ impl Coordinator {
             .clone()
     }
 
-    /// Open a binary in a new slot, or return existing slot for the path
+    /// Returns the session's slot, an existing slot for the path, or a new one.
     pub async fn open(&self, path: &str, session_id: &str) -> Result<Arc<Slot>> {
-        // Canonicalize so different spellings of the same file (relative paths,
-        // "./x", symlinks) collapse to ONE worker — this both makes dedup reliable
-        // and guarantees the worker (and its save target) get an absolute path.
-        // If the path doesn't resolve yet, keep the raw string; the worker will
-        // then surface a proper open error.
+        // Collapses relative paths, "./x" and symlinks onto one worker, and hands
+        // the worker an absolute path to save against. An unresolvable path is
+        // passed through so the worker reports the real open error.
         let canonical = std::fs::canonicalize(path)
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|_| path.to_string());
         let path = canonical.as_str();
 
-        // Serialize opens of THIS binary only (so concurrent opens of the same
-        // path dedup to one worker) while opens of OTHER binaries run in parallel.
-        // open() blocks until initial analysis finishes, so a single global lock
-        // would stall the whole pool behind one large binary.
         let plock = self.lock_for_path(path).await;
         let _pguard = plock.lock().await;
 
-        // Reap workers that died on their own before doing anything else: they
-        // otherwise keep occupying a max_slots slot forever (the only other prune
-        // site is close_session) and keep their private temp dir alive. Dropping
-        // the last Arc here triggers Slot::drop, which removes that temp dir.
+        // Self-terminated workers are reaped here and in close_session only. Left
+        // in place they hold a slot against max_slots forever; dropping the last
+        // Arc also runs Slot::drop, which removes the private temp dir.
         {
             let mut slots = self.slots.write().await;
             let mut dead_ids: Vec<String> = Vec::new();
@@ -112,9 +93,8 @@ impl Coordinator {
             }
         }
 
-        // Reuse the session's worker only if it holds the SAME binary. A mismatch
-        // means the AI reused a session id for a different file — fail loudly
-        // instead of silently returning the wrong binary.
+        // A session id reused for a different file fails loudly rather than
+        // returning the wrong binary.
         {
             let sessions = self.sessions.read().await;
             if let Some(slot) = sessions.get(session_id) {
@@ -131,8 +111,8 @@ impl Coordinator {
             }
         }
 
-        // Reuse any live worker already serving this exact path (shared across
-        // sessions instead of spawning a duplicate).
+        // Sessions share one worker per path; the database it holds is mutable and
+        // therefore visible to all of them.
         {
             let slots = self.slots.read().await;
             for slot in slots.iter() {
@@ -143,7 +123,6 @@ impl Coordinator {
             }
         }
 
-        // Check capacity
         {
             let slots = self.slots.read().await;
             if slots.len() >= self.config.max_slots {
@@ -154,7 +133,6 @@ impl Coordinator {
             }
         }
 
-        // Create new slot
         let slot_id = uuid::Uuid::new_v4().to_string();
         let slot = Arc::new(Slot::new(slot_id.clone(), path.to_string()));
 
@@ -168,14 +146,11 @@ impl Coordinator {
         Ok(slot)
     }
 
-    /// Route a command to the correct slot by session
+    /// Dispatches to the session's slot.
     pub async fn route(&self, session_id: &str, method: &str, params: serde_json::Value) -> Result<serde_json::Value> {
-        // Clone the Arc out and DROP the sessions read-guard before the (possibly
-        // very long) command await. Holding the guard across send_command would —
-        // because tokio's RwLock is write-preferring — let a single in-flight
-        // wait_analysis (up to ~610s) block every other open()/route()/close that
-        // needs the lock, stalling the whole coordinator. The slot is refcounted,
-        // so it stays valid without the guard.
+        // The read guard must not span the command await. tokio's RwLock is
+        // write-preferring, so one in-flight wait_analysis (~610s) would block every
+        // open/route/close behind it. The slot is refcounted and outlives the guard.
         let slot = {
             let sessions = self.sessions.read().await;
             sessions.get(session_id).cloned()
@@ -186,37 +161,33 @@ impl Coordinator {
             return Err(anyhow!("Worker for session {} has died", session_id));
         }
 
-        // wait_analysis can block up to 600s on the worker side — match the timeout
         let timeout = match method {
+            // Clears the worker's own bound by 10s so it reports the timeout first.
             "wait_analysis" => {
                 let max_sec = params.get("max_seconds")
                     .and_then(|v| v.as_i64())
                     .unwrap_or(300)
                     .min(600) as u64;
-                // Add 10s buffer over the worker's own timeout
                 Duration::from_secs(max_sec + 10)
             }
-            // Heavy ops (decompile/survey/analyze) on large binaries can take a
-            // while; a dead worker is detected immediately via stdout close, so
-            // this timeout only bounds genuinely-stuck-but-alive workers.
+            // Only bounds stuck-but-alive workers; a dead one surfaces at once via
+            // stdout close.
             _ => Duration::from_secs(300),
         };
 
         slot.send_command_with_timeout(method, params, timeout).await
     }
 
-    /// List all active slots
+    /// Reports every slot from cached state, without querying any worker.
     pub async fn list_slots(&self) -> Vec<SlotInfo> {
         let slots = self.slots.read().await;
         let mut infos = Vec::new();
 
         for slot in slots.iter() {
             let alive = slot.is_alive().await;
-            // `ready_data` is the worker's open-time snapshot; it is never
-            // refreshed here (querying the worker would make list_slots block
-            // and risk deadlock). Its `analyzing` flag therefore goes stale —
-            // it stays `true` forever even after auto-analysis finishes. Drop
-            // that untrustworthy field while keeping the rest of the snapshot.
+            // `ready_data` is the open-time snapshot and is never refreshed, so its
+            // `analyzing` flag stays true even once analysis has finished. The rest
+            // of the snapshot is immutable and survives.
             let mut ready = slot.ready_data.lock().await.clone();
             if let Some(serde_json::Value::Object(map)) = ready.as_mut() {
                 map.remove("analyzing");
@@ -232,13 +203,8 @@ impl Coordinator {
         infos
     }
 
-    /// Close a session. Stops the underlying worker only if no other session
-    /// still references it.
+    /// Unmaps the session, stopping its worker only once nothing else references it.
     pub async fn close_session(&self, session_id: &str) -> Result<()> {
-        // Multiple sessions can share ONE worker (same binary, deduped on the
-        // canonical path). Closing one session must only unmap it — the worker
-        // is torn down only when it becomes unreferenced, or we'd kill it out
-        // from under the sibling sessions still using it.
         let slot_to_stop = {
             let mut sessions = self.sessions.write().await;
             match sessions.remove(session_id) {
@@ -250,7 +216,6 @@ impl Coordinator {
         if let Some(slot) = slot_to_stop {
             slot.stop().await?;
 
-            // Remove from slots list
             let mut slots = self.slots.write().await;
             slots.retain(|s| s.id != slot.id);
         }
@@ -258,9 +223,8 @@ impl Coordinator {
         Ok(())
     }
 
-    /// Batch convert raw binaries to .i64 databases.
-    /// Opens workers in parallel (limited by concurrency), waits for analysis, saves .i64, closes.
-    /// Returns results for each file.
+    /// Converts each binary to .i64 under a `concurrency` cap. Results come back in
+    /// input order; a per-file failure is reported in its entry, not raised.
     pub async fn batch_convert(
         self: &Arc<Self>,
         paths: Vec<String>,
@@ -281,7 +245,6 @@ impl Coordinator {
             let out_dir = output_dir.clone();
 
             let handle = tokio::spawn(async move {
-                // Acquire semaphore permit — limits concurrency
                 let _permit = sem.acquire().await.unwrap();
 
                 let session_id = format!("__batch_{}_{}", idx, uuid::Uuid::new_v4());
@@ -318,17 +281,16 @@ impl Coordinator {
                     }
                 };
 
-                // Always try to clean up the session
+                // Runs on the failure path too, so a bad file frees its slot.
                 let _ = coord.close_session(&session_id).await;
 
-                // Return the index so results can be re-ordered to match input.
                 (idx, convert_result)
             });
 
             handles.push(handle);
         }
 
-        // Collect, then restore input order (tasks finish out of order).
+        // Tasks finish out of order, so the index carried through restores it.
         let mut collected: Vec<(usize, ConvertResult)> = Vec::with_capacity(total);
         for handle in handles {
             if let Ok(pair) = handle.await {
@@ -339,7 +301,7 @@ impl Coordinator {
         collected.into_iter().map(|(_, r)| r).collect()
     }
 
-    /// Convert a single binary: open → wait_analysis → save_idb → return path
+    /// open → wait_analysis → save_idb, returning the .i64 path and its counts.
     async fn convert_single(
         coord: &Arc<Self>,
         path: &str,
@@ -347,10 +309,8 @@ impl Coordinator {
         output_dir: Option<&str>,
         max_analysis_seconds: i64,
     ) -> Result<(String, u64, u64)> {
-        // Open the binary
         coord.open(path, session_id).await?;
 
-        // Wait for auto-analysis to complete
         let wait_params = serde_json::json!({"max_seconds": max_analysis_seconds});
         let wait_result = coord.route(session_id, "wait_analysis", wait_params).await?;
 
@@ -359,7 +319,6 @@ impl Coordinator {
             return Err(anyhow!("Analysis timed out after {}s", max_analysis_seconds));
         }
 
-        // Compute output path
         let output_path = if let Some(dir) = output_dir {
             let filename = PathBuf::from(path)
                 .file_name()
@@ -369,11 +328,10 @@ impl Coordinator {
             out.push(format!("{}.i64", filename));
             out.to_string_lossy().to_string()
         } else {
-            // Save next to the original file: xxx.dll → xxx.dll.i64
+            // Suffixed, not replaced: xxx.dll → xxx.dll.i64
             format!("{}.i64", path)
         };
 
-        // Save the .i64 database
         let save_params = serde_json::json!({"output_path": output_path});
         let save_result = coord.route(session_id, "save_idb", save_params).await?;
 

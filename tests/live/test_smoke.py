@@ -20,9 +20,8 @@ import tempfile
 from pathlib import Path
 
 
-# Repo root: this file lives in tests/live/. In the release tarball it sits at
-# the package root instead, where the binaries are siblings — pass --server /
-# --worker or set IDA_HIVE_SERVER_EXE / IDA_HIVE_WORKER_EXE there.
+# Repo root. In the release tarball this file sits at the package root instead,
+# where the binaries are siblings — pass --server/--worker there.
 ROOT = Path(__file__).resolve().parents[2]
 
 

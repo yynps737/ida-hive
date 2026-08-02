@@ -1,23 +1,8 @@
 #!/usr/bin/env bash
-# build_check.sh — license-free build & test validation for ida-hive.
-#
-# Verifies everything that can be verified WITHOUT an activated IDA Pro license:
-#
-#   1. Rust coordinator builds (cargo build --release).
-#   2. C++ worker compiles AND links against the real IDA 9.2 SDK, via the
-#      repo's own worker/CMakeLists.txt (the documented build path).
-#   3. The linked worker runs up to idalib init_library() and emits a clean
-#      init_error — proving the binary is well-formed right up to the license
-#      gate (which is the ONE thing no license-free check can pass).
-#   4. The coordinator end-to-end suite (tests/test_coordinator.py) passes,
-#      driving the real ida-hive binary over MCP with a mock idalib worker.
-#
-# What this canNOT verify (needs an activated license): the actual analysis
-# behaviour of the 64 worker tools, and the README performance numbers. Those
-# require idalib to initialize, which fails without activation.
-#
-# The public SDK is cloned automatically if $IDASDK is not set. Nothing here
-# touches or requires any license file.
+# Runs every check that needs no IDA license: the Rust build, the C++ worker build
+# and link against the real SDK, the worker reaching idalib's license gate, and the
+# coordinator suite. Tool behaviour stays unverified, since idalib will not
+# initialize without activation. The public SDK is cloned when $IDASDK is unset.
 #
 # Usage:
 #   scripts/build_check.sh                 # full run, cloning the SDK if needed
@@ -38,7 +23,6 @@ step()  { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
 ok()    { printf '  \033[32mOK\033[0m   %s\n' "$*"; pass=$((pass+1)); }
 bad()   { printf '  \033[31mFAIL\033[0m %s\n' "$*"; fail=$((fail+1)); }
 
-# ---------------------------------------------------------------------------
 step "1/4  Rust coordinator (cargo build --release)"
 if cargo build --release >/tmp/ida_hive_cargo.log 2>&1; then
     ok "coordinator built: target/release/ida-hive"
@@ -46,7 +30,6 @@ else
     bad "cargo build failed — see /tmp/ida_hive_cargo.log"; tail -20 /tmp/ida_hive_cargo.log
 fi
 
-# ---------------------------------------------------------------------------
 if [ "${SKIP_WORKER:-0}" != "1" ]; then
     step "2/4  C++ worker build against the real IDA 9.2 SDK"
 
@@ -78,7 +61,6 @@ if [ "${SKIP_WORKER:-0}" != "1" ]; then
         bad "IDASDK=$IDASDK has no cmake/bootstrap.cmake (submodule not initialized?)"
     fi
 
-    # -----------------------------------------------------------------------
     step "3/4  Worker runs up to the license gate (clean init_error)"
     WORKER="$(find "$BUILD_DIR" -name ida_mcp_worker -type f 2>/dev/null | head -1)"
     if [ -n "$WORKER" ]; then
@@ -97,7 +79,6 @@ else
     step "2-3/4  C++ worker  (SKIPPED: SKIP_WORKER=1)"
 fi
 
-# ---------------------------------------------------------------------------
 step "4/4  Coordinator end-to-end suite (mock idalib worker)"
 if [ -x target/release/ida-hive ]; then
     if python3 tests/test_coordinator.py; then
@@ -109,7 +90,6 @@ else
     bad "target/release/ida-hive missing — cannot run the coordinator suite"
 fi
 
-# ---------------------------------------------------------------------------
 printf '\n\033[1m== summary ==\033[0m\n'
 printf '  %d passed, %d failed\n' "$pass" "$fail"
 printf '  NOTE: real idalib analysis behaviour is NOT covered here — it needs an\n'
