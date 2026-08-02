@@ -5,6 +5,9 @@ target/
 worker/build/
 worker/build-*/
 
+# SDK clone cache used by tests/build_check.sh (public headers, not committed)
+worker/.ida-sdk-cache/
+
 # IDE
 .vscode/
 .idea/

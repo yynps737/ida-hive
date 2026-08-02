@@ -19,9 +19,20 @@ Per-request behaviour is steered by magic values in any string parameter:
     "SLEEP:<ms>"   delay this request by <ms> before replying
     "CRASH"        hard-exit the process (exercises worker-death handling)
     "ERROR:<msg>"  reply with a protocol-level error object
+    "GARBAGE"      emit a non-JSON stdout line before the real reply (the
+                   coordinator must log-and-skip it, per slot.rs, not choke)
 
-Requests are served on threads so the coordinator's response multiplexing
-(several in-flight ids on one worker) is actually exercised.
+Dispatch fidelity: the real worker (worker/protocol.h CommandDispatcher::run)
+is STRICTLY SERIAL — it reads one line, runs the handler to completion, writes
+the reply, then reads the next. So a slow call on one worker delays the next
+call on THAT worker; concurrency exists only ACROSS workers. This mock mirrors
+that: requests are processed serially in the read loop by default.
+
+    *concurrent*  (in the file name) opt into thread-per-request dispatch, to
+                  exercise the coordinator's id-multiplexing / out-of-order
+                  response matching as a defensive check. This is a coordinator
+                  capability, NOT real-worker behavior — the real worker never
+                  replies out of order.
 """
 
 import json
@@ -45,16 +56,18 @@ def log(msg):
 
 
 def scan_params(params):
-    """Return (sleep_ms, crash, error_msg) from magic values in the params."""
-    sleep_ms, crash, err = 0, False, None
+    """Return (sleep_ms, crash, error_msg, garbage) from magic values."""
+    sleep_ms, crash, err, garbage = 0, False, None, False
 
     def walk(v):
-        nonlocal sleep_ms, crash, err
+        nonlocal sleep_ms, crash, err, garbage
         if isinstance(v, str):
             if v.startswith("SLEEP:"):
                 sleep_ms = max(sleep_ms, int(v.split(":", 1)[1]))
             elif v == "CRASH":
                 crash = True
+            elif v == "GARBAGE":
+                garbage = True
             elif v.startswith("ERROR:"):
                 err = v.split(":", 1)[1]
         elif isinstance(v, dict):
@@ -65,7 +78,7 @@ def scan_params(params):
                 walk(x)
 
     walk(params)
-    return sleep_ms, crash, err
+    return sleep_ms, crash, err, garbage
 
 
 class Worker:
@@ -161,12 +174,18 @@ def serve_request(worker, req):
     method = req.get("method", "")
     params = req.get("params") or {}
 
-    sleep_ms, crash, err = scan_params(params)
+    sleep_ms, crash, err, garbage = scan_params(params)
     if sleep_ms:
         time.sleep(sleep_ms / 1000.0)
     if crash:
         log(f"CRASH requested by request id={req_id}")
         os._exit(1)
+    if garbage:
+        # A non-JSON line on stdout — the coordinator must skip it and still
+        # deliver the real reply below.
+        with WRITE_LOCK:
+            sys.stdout.write("this is not json <<<\n")
+            sys.stdout.flush()
     if err is not None:
         emit({"id": req_id, "error": {"code": -32000, "message": err}})
         return
@@ -216,6 +235,9 @@ def main():
         return 1
 
     worker = Worker(path, db_dir)
+    # Fidelity: the real CommandDispatcher::run is single-threaded and serial.
+    # Only opt into concurrent dispatch when the file name asks for it.
+    concurrent = "concurrent" in name
     emit({"event": "ready", "data": {
         "path": path,
         "db_dir": db_dir,
@@ -237,7 +259,12 @@ def main():
         except json.JSONDecodeError as exc:
             log(f"bad request line: {exc}")
             continue
-        threading.Thread(target=serve_request, args=(worker, req), daemon=True).start()
+        if concurrent:
+            threading.Thread(target=serve_request, args=(worker, req), daemon=True).start()
+        else:
+            # Serial dispatch — mirrors the real worker: a slow handler blocks
+            # the next request on this worker until it returns.
+            serve_request(worker, req)
 
     return 0
 

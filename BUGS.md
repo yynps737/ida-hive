@@ -153,3 +153,45 @@ crash/hang/leak. Suggest a separate "tool-surface fixes" PR.
 3. **M1** (call-graph correctness across 5 tools) — shared helper.
 4. **H2** (declare_stack retype) — needs SDK investigation.
 5. **M8/M9/M10/M11** + LOW batch.
+
+---
+
+## Appendix — license-free validation pass (coordinator suite + C++ build/static analysis)
+
+Found without an activated IDA license, via `tests/build_check.sh`
+(cargo build + real-SDK CMake build of the worker + `clang-tidy`/`-Wall -Wextra`)
+and the `tests/test_coordinator.py` end-to-end suite. These are separate from the
+tool-surface bugs above.
+
+- **V1 — [CONFIRMED] `server_health` reports `max_slots: 100` unconditionally**
+  (`src/tools.rs`, the `server_health` handler). It ignores `IDA_MCP_MAX_SLOTS`
+  and `config.max_slots`. The real cap is enforced correctly by `open()`
+  (`Max slots (N) reached`), so only the *reported* number is wrong — but it
+  misleads capacity planning by an MCP client. **Fix:** thread `config.max_slots`
+  through to `server_health`. Tracked by the `xfail` test
+  `test_server_health_reports_configured_max_slots`.
+
+- **V2 — [CONFIRMED] `enum_upsert` silently ignores its `bitfield` parameter**
+  (`worker/commands/cmd_types.cpp`). The value is read (`params.value("bitfield",
+  false)`) and documented in the comment, then never used — the enum is always
+  built as a plain C `enum { … }`. A caller passing `bitfield: true` (expecting a
+  bitmask enum) gets a plain enum with no error. **Fix:** apply the bitfield flag
+  after `parse_decls` (e.g. `set_enum_flag`/tinfo bitmask), or reject the param.
+
+- **V3 — [CONFIRMED, cosmetic] license-gate `init_error` carries a garbage `code`**
+  (`worker/worker.cpp`, `init_library()` path). The `code` varies run-to-run
+  (uninitialized on the failure path); the `message` (`idalib init_library()
+  failed (check IDA license/activation)`) is correct. **Fix:** set a stable code
+  or drop the field on this path.
+
+- **[CLEARED] C++ worker static analysis.** All 10 translation units compile +
+  link against the real IDA 9.2 SDK. `-Wall -Wextra`: 8 benign warnings
+  (unused params/var). `clang-tidy` bugprone/analyzer/cert: no real defects —
+  the two empty `catch` blocks (`cmd_core.cpp`, `cmd_memory.cpp`) are intentional
+  parse-or-fallback idioms.
+
+- **[CLEARED] Coordinator concurrency/lifecycle.** 34 end-to-end tests pass:
+  path dedup across spellings/symlinks, shared-worker refcounting, cross-worker
+  concurrency, high-concurrency reply routing, close-during-in-flight, open/close
+  churn (no slot/temp-dir leaks), malformed-output tolerance, crash recovery,
+  ready/route timeouts, batch_convert ordering + per-file failure isolation.
