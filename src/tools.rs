@@ -1017,8 +1017,12 @@ impl IdaMcpServer {
 
     // ---- Batch conversion ----
 
-    #[tool(description = "Batch convert raw binaries to .i64 databases. Opens workers in parallel, auto-analyzes, saves .i64. Returns per-file results with function counts and elapsed time.")]
+    #[tool(description = "Batch convert raw binaries to .i64 databases. Opens workers in parallel, auto-analyzes, saves .i64. Returns per-file results with function counts and elapsed time. `concurrency` is capped by IDA_MCP_MAX_SLOTS: asking for more parallelism than the pool allows converts what fits and reports the rest as per-file errors, so keep concurrency at or below max_slots.")]
     async fn batch_convert(&self, Parameters(BatchConvertReq { paths, output_dir, concurrency, max_analysis_seconds }): Parameters<BatchConvertReq>) -> String {
+        // Two independent limits meet here: this semaphore bounds how many files are
+        // in flight, while the coordinator's max_slots bounds how many workers exist
+        // at all. When the pool is the tighter one, the excess opens fail rather than
+        // queue, and each failure lands in that file's result entry.
         let concurrency = concurrency.unwrap_or(5).clamp(1, 50) as usize;
         let max_secs = max_analysis_seconds.unwrap_or(600).clamp(30, 3600);
 
