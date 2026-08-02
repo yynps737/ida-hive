@@ -5,7 +5,7 @@ mod tools;
 
 use std::sync::Arc;
 use anyhow::Result;
-use tracing::{info, Level};
+use tracing::{info, warn, Level};
 use tracing_subscriber::EnvFilter;
 
 use rmcp::ServiceExt;
@@ -49,15 +49,62 @@ async fn main() -> Result<()> {
     info!(max_slots = config.max_slots, worker = %config.worker_exe, "Starting coordinator");
 
     let coordinator = Arc::new(Coordinator::new(config));
-    let server = IdaMcpServer::new(coordinator);
+    let server = IdaMcpServer::new(coordinator.clone());
 
     let transport = rmcp::transport::io::stdio();
     let server_handle = server.serve(transport).await?;
 
     info!("MCP server running on stdio");
 
-    let quit_reason = server_handle.waiting().await?;
-    info!("Server quit: {:?}", quit_reason);
+    // A signal has to be caught for the workers' database directories to be removed:
+    // terminating on the default disposition skips unwinding, so `Slot::drop` never
+    // runs and each directory is stranded. Clients stop their MCP servers this way.
+    tokio::select! {
+        reason = server_handle.waiting() => {
+            info!("Server quit: {:?}", reason?);
+            coordinator.shutdown().await;
+        }
+        () = terminate_signal() => {
+            info!("Received a termination signal");
+            coordinator.shutdown().await;
+            // The stdio transport reads stdin on a blocking task, which the runtime
+            // waits for on the way out — and the peer's pipe is still open, so that
+            // read never returns. Every worker and directory this process owns was
+            // released just above, which is what a signal would otherwise skip.
+            std::process::exit(0);
+        }
+    }
 
     Ok(())
+}
+
+/// Resolves when the process is asked to stop.
+#[cfg(unix)]
+async fn terminate_signal() {
+    use tokio::signal::unix::{signal, SignalKind};
+    let mut term = match signal(SignalKind::terminate()) {
+        Ok(s) => s,
+        // Without the handler the default disposition applies, which is the behaviour
+        // this function exists to replace; waiting forever leaves the other branch.
+        Err(e) => {
+            warn!(error = %e, "cannot listen for SIGTERM");
+            return std::future::pending().await;
+        }
+    };
+    tokio::select! {
+        _ = term.recv() => {},
+        r = tokio::signal::ctrl_c() => {
+            if let Err(e) = r {
+                warn!(error = %e, "cannot listen for Ctrl-C");
+            }
+        },
+    }
+}
+
+#[cfg(not(unix))]
+async fn terminate_signal() {
+    if let Err(e) = tokio::signal::ctrl_c().await {
+        warn!(error = %e, "cannot listen for Ctrl-C");
+        std::future::pending::<()>().await;
+    }
 }
