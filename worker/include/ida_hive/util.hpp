@@ -7,6 +7,7 @@
 #include <pro.h>
 #include <name.hpp>
 #include <entry.hpp>
+#include <bytes.hpp>
 
 #include <string>
 #include <stdexcept>
@@ -39,6 +40,31 @@ inline std::string ea_hex(ea_t ea)
     char buf[32];
     qsnprintf(buf, sizeof(buf), "0x%llX", (unsigned long long)ea);
     return buf;
+}
+
+// Reads up to size bytes, returning how many carried a value.
+//
+// get_bytes stops at the first byte the database holds no value for — an
+// uninitialized .bss hole, most often — and returns the count it managed. Whatever
+// the buffer held beyond that point stays there, so a zero-filled buffer makes "no
+// data" read exactly like a stored zero. Callers must honour the count.
+inline size_t read_available(uint8_t* buf, size_t size, ea_t ea)
+{
+    const ssize_t got = get_bytes(buf, size, ea);
+    return got > 0 ? (size_t)got : 0;
+}
+
+inline std::string to_hex(const uint8_t* buf, size_t n)
+{
+    std::string out;
+    out.reserve(n * 2);
+    for (size_t i = 0; i < n; i++)
+    {
+        char h[4];
+        qsnprintf(h, sizeof(h), "%02X", buf[i]);
+        out += h;
+    }
+    return out;
 }
 
 // stderr only; stdout carries the protocol.
