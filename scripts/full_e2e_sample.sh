@@ -5,7 +5,7 @@ set -euo pipefail
 # For the cross-platform smoke path, use tests/live/test_smoke.py instead.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-IDA_HIVE_IDA_PATH="${IDA_HIVE_IDA_PATH:-/c/Program Files/IDA Professional 9.2}"
+IDA_HIVE_IDA_PATH="${IDA_HIVE_IDA_PATH:-/c/Program Files/IDA Professional 9.4}"
 export PATH="${IDA_HIVE_IDA_PATH}:$PATH"
 export IDA_MCP_WORKER_EXE="${IDA_MCP_WORKER_EXE:-$ROOT/worker/build/Release/ida_mcp_worker.exe}"
 TARGET_BINARY="${IDA_HIVE_TEST_BINARY:-D:/SteamLibrary/steamapps/common/Counter-Strike Global Offensive/game/bin/win64/resourcesystem.dll}"
@@ -89,7 +89,7 @@ send '{"jsonrpc":"2.0","id":92,"method":"tools/call","params":{"name":"analyze_c
 send '{"jsonrpc":"2.0","id":93,"method":"tools/call","params":{"name":"diff_before_after","arguments":{"ea":"0x180001070","action":"set_comment","value":"diff_e2e","session":"x"}}}' 1
 send '{"jsonrpc":"2.0","id":94,"method":"tools/call","params":{"name":"analyze_batch","arguments":{"addresses":["0x180001000","0x180001070"],"session":"x"}}}' 1
 
-# Extended new 6
+# Extended 6
 send '{"jsonrpc":"2.0","id":95,"method":"tools/call","params":{"name":"imports_query","arguments":{"module":"tier0","limit":2,"session":"x"}}}' 0.5
 send '{"jsonrpc":"2.0","id":96,"method":"tools/call","params":{"name":"xrefs_to_field","arguments":{"ea":"0x180044510","field_offset":8,"limit":3,"session":"x"}}}' 0.5
 send '{"jsonrpc":"2.0","id":97,"method":"tools/call","params":{"name":"export_funcs","arguments":{"addresses":["0x180044510"],"session":"x"}}}' 0.5
@@ -109,7 +109,7 @@ echo "=== RESULTS ==="
 TOTAL=$(grep -c '"jsonrpc"' /tmp/rust_full_e2e.txt)
 echo "Total MCP responses: $TOTAL"
 
-# Check every expected ID
+# The id list below is the coverage contract.
 MISSING=0
 for id in 0 1 2 3 10 11 12 13 14 15 16 17 20 21 22 23 24 25 26 30 31 32 33 40 41 42 43 50 51 52 53 54 55 60 61 62 63 64 65 66 70 71 72 73 74 75 80 81 82 90 91 92 93 94 95 96 97 98 100 101 110 111 112 113; do
     if ! grep -q "\"id\":$id[,}]" /tmp/rust_full_e2e.txt; then
@@ -124,6 +124,6 @@ else
     echo "MISSING: $MISSING responses"
 fi
 
-# Count isError
+
 ISERROR=$(grep -c '"isError":true' /tmp/rust_full_e2e.txt)
 echo "isError count: $ISERROR"

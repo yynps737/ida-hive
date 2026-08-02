@@ -14,6 +14,10 @@ binaries that IDA can load directly — through a single MCP endpoint.
 - **Linux**: built and validated from source on Ubuntu 26.04 with IDA Pro 9.2 and the public
   `HexRaysSA/ida-sdk` tag `v9.2.0-sdk.1`. The behavior and measurements in this README come from
   that validation.
+- **SDK version vs runtime version**: the worker is compiled against the 9.2 SDK, which is the
+  oldest runtime it supports — not a cap. A 9.2-SDK build has been smoke-tested against an IDA 9.4
+  runtime (`init_library`, `open_database`, `get_info`, `list_funcs`) with no ABI trouble. The
+  public SDK currently tags no 9.4 release; `v9.3.1-sdk.1` is the newest available.
 - **Windows**: supported by the same codebase; release assets and the original performance numbers
   were Windows-first. The Windows build path below is unchanged but was not re-validated here.
 - **Single codebase**: one MCP contract and one tool surface across both platforms.
@@ -140,7 +144,7 @@ Two variables drive the worker build:
 
 ```bash
 export IDASDK=/path/to/ida-sdk/src
-export IDABIN=/path/to/IDA-install        # e.g. /home/you/idapro-9.2
+export IDABIN=/path/to/IDA-install        # e.g. /home/you/ida-pro-9.4
 cmake -S worker -B worker/build-linux -DCMAKE_BUILD_TYPE=Release
 cmake --build worker/build-linux -j"$(nproc)"
 cargo build --release
@@ -157,7 +161,7 @@ worker/build-linux/ida_mcp_worker
 
 ```bat
 set IDASDK=C:\path\to\ida-sdk\src
-set IDABIN=C:\Program Files\IDA Professional 9.2
+set IDABIN=C:\Program Files\IDA Professional 9.4
 cmake -S worker -B worker/build
 cmake --build worker/build --config Release
 cargo build --release --target x86_64-pc-windows-msvc
@@ -199,7 +203,7 @@ exec /path/to/target/release/ida-hive
 
 ```bat
 @echo off
-set "PATH=C:\Program Files\IDA Professional 9.2;%PATH%"
+set "PATH=C:\Program Files\IDA Professional 9.4;%PATH%"
 set "IDA_MCP_WORKER_EXE=C:\path\to\ida_mcp_worker.exe"
 set "IDA_MCP_MAX_SLOTS=100"
 C:\path\to\ida-hive.exe

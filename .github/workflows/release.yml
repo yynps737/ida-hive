@@ -62,7 +62,7 @@ jobs:
           #!/usr/bin/env bash
           set -euo pipefail
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-          export LD_LIBRARY_PATH="${IDA_HIVE_IDA_PATH:-/opt/ida-pro-9.2}:${LD_LIBRARY_PATH:-}"
+          export LD_LIBRARY_PATH="${IDA_HIVE_IDA_PATH:-/opt/ida-pro-9.4}:${LD_LIBRARY_PATH:-}"
           export IDA_MCP_WORKER_EXE="${IDA_MCP_WORKER_EXE:-$SCRIPT_DIR/ida_mcp_worker}"
           export IDA_MCP_MAX_SLOTS="${IDA_MCP_MAX_SLOTS:-32}"
           exec "$SCRIPT_DIR/ida-hive"
@@ -124,7 +124,7 @@ jobs:
           @echo off
           setlocal
           set "SCRIPT_DIR=%~dp0"
-          if not defined IDA_HIVE_IDA_PATH set "IDA_HIVE_IDA_PATH=C:\Program Files\IDA Professional 9.2"
+          if not defined IDA_HIVE_IDA_PATH set "IDA_HIVE_IDA_PATH=C:\Program Files\IDA Professional 9.4"
           set "PATH=%IDA_HIVE_IDA_PATH%;%PATH%"
           if not defined IDA_MCP_WORKER_EXE set "IDA_MCP_WORKER_EXE=%SCRIPT_DIR%ida_mcp_worker.exe"
           if not defined IDA_MCP_MAX_SLOTS set "IDA_MCP_MAX_SLOTS=32"
