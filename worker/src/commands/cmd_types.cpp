@@ -240,7 +240,7 @@ json cmd_read_struct(const json &params)
         throw std::runtime_error("Cannot determine struct size");
 
     std::vector<uint8_t> data(ssize);
-    get_bytes(data.data(), ssize, ea);
+    const size_t stored = read_available(data.data(), ssize, ea);
 
     udt_type_data_t udt;
     if (!tif.get_udt_details(&udt))
@@ -255,27 +255,92 @@ json cmd_read_struct(const json &params)
         qstring mtype;
         m.type.print(&mtype);
 
-        asize_t moff = m.offset / 8; // bits to bytes
-        asize_t msize = m.size / 8;
+        json field = {
+            {"name", mname.c_str()},
+            {"type", mtype.c_str()},
+        };
 
-        std::string hex_val;
-        for (asize_t b = 0; b < msize && (moff + b) < ssize; b++)
+        // udm_t::offset and ::size are in bits. Dividing both by 8 collapses any
+        // field narrower than a byte to size 0, and loses the bit position of the
+        // rest, so a bitfield has to be read out of its storage unit by hand.
+        if (m.is_bitfield())
         {
-            char h[4];
-            qsnprintf(h, sizeof(h), "%02X", data[moff + b]);
-            hex_val += h;
+            bitfield_type_data_t bi;
+            if (!m.type.get_bitfield_details(&bi) || bi.nbytes == 0 || bi.width == 0)
+            {
+                // A zero-width bitfield is an alignment directive and holds nothing.
+                // Dropping it would leave the field list disagreeing with the type.
+                field["offset"]    = m.offset / 8;
+                field["size"]      = nullptr;
+                field["bit_width"] = bi.width;
+                field["hex"]       = nullptr;
+                field["value"]     = nullptr;
+                fields.push_back(field);
+                continue;
+            }
+
+            const uint64 unit_bits = (uint64)bi.nbytes * 8;
+            const uint64 unit_off  = (m.offset / unit_bits) * bi.nbytes;
+            const uint64 bit_in    = m.offset % unit_bits;
+
+            field["offset"]     = unit_off;
+            field["size"]       = nullptr;   // Not a whole number of bytes.
+            field["bit_offset"] = m.offset;
+            field["bit_width"]  = bi.width;
+
+            if (unit_off + bi.nbytes > stored)
+            {
+                field["hex"]      = nullptr;
+                field["value"]    = nullptr;
+                field["no_data"]  = true;
+                fields.push_back(field);
+                continue;
+            }
+
+            // Assembled by endianness, then shifted by the bit position the same way
+            // round: the high end of the unit is where a big-endian bitfield starts.
+            uint64 unit = 0;
+            for (uint64 b = 0; b < bi.nbytes; b++)
+                unit |= (uint64)data[unit_off + b] << (inf_is_be() ? (unit_bits - 8 - b * 8) : (b * 8));
+
+            const uint64 shift = inf_is_be() ? (unit_bits - bit_in - bi.width) : bit_in;
+            const uint64 mask  = bi.width >= 64 ? ~0ULL : ((1ULL << bi.width) - 1);
+            uint64 raw = (unit >> shift) & mask;
+
+            if (!bi.is_unsigned && bi.width < 64 && ((raw >> (bi.width - 1)) & 1) != 0)
+                field["value"] = (int64)(raw | ~mask);   // Sign-extend from the field's width.
+            else
+                field["value"] = raw;
+
+            char h[24];
+            qsnprintf(h, sizeof(h), "%llX", (unsigned long long)raw);
+            field["hex"] = h;    // The field's own bits, not the bytes around them.
+
+            fields.push_back(field);
+            continue;
         }
 
-        fields.push_back({
-            {"name",   mname.c_str()},
-            {"type",   mtype.c_str()},
-            {"offset", moff},
-            {"size",   msize},
-            {"hex",    hex_val},
-        });
+        const asize_t moff  = m.offset / 8;
+        const asize_t msize = m.size / 8;
+        const asize_t avail = moff < stored ? qmin(msize, (asize_t)(stored - moff)) : 0;
+
+        field["offset"] = moff;
+        field["size"]   = msize;
+        field["hex"]    = avail > 0 ? json(to_hex(data.data() + moff, avail)) : json(nullptr);
+        // A zero-filled buffer would report an unstored field as a stored zero.
+        if (avail < msize)
+            field[avail == 0 ? "no_data" : "partial"] = true;
+
+        fields.push_back(field);
     }
 
-    return {{"ea", ea_hex(ea)}, {"struct", sname}, {"size", ssize}, {"fields", fields}};
+    json out = {{"ea", ea_hex(ea)}, {"struct", sname}, {"size", ssize}, {"fields", fields}};
+    if (stored < (size_t)ssize)
+    {
+        out["stored"]    = stored;
+        out["truncated"] = true;
+    }
+    return out;
 }
 
 json cmd_type_apply_batch(const json &params)
