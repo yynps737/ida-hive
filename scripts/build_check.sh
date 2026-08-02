@@ -19,8 +19,10 @@ SDK_TAG="v9.4.0-release"
 SDK_CACHE="${SDK_CACHE:-$ROOT/worker/.ida-sdk-cache}"
 BUILD_DIR="${BUILD_DIR:-$ROOT/worker/build-linux}"
 
-pass=0; fail=0
-step()  { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
+pass=0; fail=0; skip=0
+declare -a skipped=()
+step()  { printf '\n\033[1m== %s ==\033[0m\n' "$*"; current_step="$*"; }
+skipped() { skip=$((skip+1)); skipped+=("$current_step — $*"); printf '  \033[33mSKIP\033[0m %s\n' "$*"; }
 ok()    { printf '  \033[32mOK\033[0m   %s\n' "$*"; pass=$((pass+1)); }
 bad()   { printf '  \033[31mFAIL\033[0m %s\n' "$*"; fail=$((fail+1)); }
 
@@ -79,8 +81,7 @@ if [ "${SKIP_WORKER:-0}" != "1" ]; then
     # The SDK's lib/ holds link-time stubs only: they satisfy the linker but
     # segfault when called, so this step needs a real install to mean anything.
     elif [ ! -x "$IDABIN/idat" ] && [ ! -x "$IDABIN/ida" ]; then
-        echo "  SKIPPED: IDABIN=$IDABIN holds link stubs, not a runnable IDA."
-        echo "           Set IDABIN to an IDA installation to cover this step."
+        skipped "IDABIN holds SDK link stubs, not a runnable IDA"
     else
         # stdout carries the protocol; the [worker] log lines go to stderr.
         OUT="$(echo '{"id":1,"method":"ping","params":{}}' \
@@ -110,7 +111,7 @@ fi
 step "6/10  Worker adversarial stress (hostile input, protocol abuse, pipelining)"
 WORKER="$(find "$BUILD_DIR" -name ida_mcp_worker -type f 2>/dev/null | head -1)"
 if [ -z "$WORKER" ] || { [ ! -x "$IDABIN/idat" ] && [ ! -x "$IDABIN/ida" ]; }; then
-    echo "  SKIPPED: needs a built worker and a runnable IDA."
+    skipped "needs a built worker and a runnable IDA"
 elif IDABIN="$IDABIN" python3 tests/stress_worker.py --worker "$WORKER" >/tmp/ida_hive_stress.log 2>&1; then
     ok "$(tail -1 /tmp/ida_hive_stress.log)"
 else
@@ -119,7 +120,7 @@ fi
 
 step "7/10  Worker endurance (memory, descriptors, kill cleanup)"
 if [ -z "$WORKER" ] || { [ ! -x "$IDABIN/idat" ] && [ ! -x "$IDABIN/ida" ]; }; then
-    echo "  SKIPPED: needs a built worker and a runnable IDA."
+    skipped "needs a built worker and a runnable IDA"
 elif IDABIN="$IDABIN" python3 tests/endurance_worker.py --worker "$WORKER" >/tmp/ida_hive_endur.log 2>&1; then
     ok "$(tail -1 /tmp/ida_hive_endur.log)"
     grep -E "^  (memory|fds|cycles):" /tmp/ida_hive_endur.log | sed 's/^/     /'
@@ -129,7 +130,7 @@ fi
 
 step "8/10  Tool correctness (invariants over the 9.4 tools)"
 if [ -z "$WORKER" ] || { [ ! -x "$IDABIN/idat" ] && [ ! -x "$IDABIN/ida" ]; }; then
-    echo "  SKIPPED: needs a built worker and a runnable IDA."
+    skipped "needs a built worker and a runnable IDA"
 elif IDABIN="$IDABIN" python3 tests/functional_tools.py --worker "$WORKER" >/tmp/ida_hive_func.log 2>&1; then
     ok "$(tail -1 /tmp/ida_hive_func.log)"
 else
@@ -139,7 +140,7 @@ fi
 
 step "9/10  Real-IDA integration (concurrent workers, sharing, slot cap)"
 if [ -z "$WORKER" ] || { [ ! -x "$IDABIN/idat" ] && [ ! -x "$IDABIN/ida" ]; }; then
-    echo "  SKIPPED: needs a built worker and a runnable IDA."
+    skipped "needs a built worker and a runnable IDA"
 elif IDABIN="$IDABIN" python3 tests/integration_real_ida.py --worker "$WORKER" >/tmp/ida_hive_integ.log 2>&1; then
     ok "$(tail -1 /tmp/ida_hive_integ.log)"
     grep -E "^    " /tmp/ida_hive_integ.log | sed 's/^/  /'
@@ -152,7 +153,7 @@ fi
 if [ "${RUN_SCALE:-0}" = "1" ]; then
     step "10/10  Worker scale (large binary, table sweeps, paging)"
     if [ -z "$WORKER" ] || { [ ! -x "$IDABIN/idat" ] && [ ! -x "$IDABIN/ida" ]; }; then
-        echo "  SKIPPED: needs a built worker and a runnable IDA."
+        skipped "needs a built worker and a runnable IDA"
     elif IDABIN="$IDABIN" python3 tests/scale_worker.py --worker "$WORKER" >/tmp/ida_hive_scale.log 2>&1; then
         ok "$(tail -1 /tmp/ida_hive_scale.log)"
         grep -E "^  (target|analysis|final)" /tmp/ida_hive_scale.log | sed 's/^/     /'
@@ -160,11 +161,17 @@ if [ "${RUN_SCALE:-0}" = "1" ]; then
         bad "scale test failed — see /tmp/ida_hive_scale.log"; tail -20 /tmp/ida_hive_scale.log
     fi
 else
-    step "10/10  Worker scale  (SKIPPED: set RUN_SCALE=1, takes several minutes)"
+    step "10/10  Worker scale"
+    skipped "set RUN_SCALE=1 to run it (takes several minutes)"
 fi
 
 printf '\n\033[1m== summary ==\033[0m\n'
-printf '  %d passed, %d failed\n' "$pass" "$fail"
-printf '  NOTE: real idalib analysis behaviour is NOT covered here — it needs an\n'
-printf '        activated IDA Pro license. This checks everything up to that gate.\n'
+printf '  %d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
+if [ "$skip" -gt 0 ]; then
+    printf '\n  \033[33m%d step(s) were skipped\033[0m — a green run here is not a full pass:\n' "$skip"
+    for s in "${skipped[@]}"; do printf '    - %s\n' "$s"; done
+    if [ ! -x "$IDABIN/idat" ] && [ ! -x "$IDABIN/ida" ]; then
+        printf '  Point IDABIN at an activated IDA installation to cover them.\n'
+    fi
+fi
 [ "$fail" -eq 0 ]

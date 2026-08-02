@@ -127,6 +127,24 @@ database; call `save_idb` to persist. `save_idb` with no path saves next to the 
 
 Not included by design: debugger tools (use x64dbg/WinDbg) and Python eval (no Python in the stack).
 
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every push and pull request. A hosted runner has
+no IDA license, so it covers the four steps that need none — the Rust build, the
+lint policy, the C++ worker compiled and linked against the public SDK, and the
+coordinator suite driven by a mock worker.
+
+The other six steps drive a real, activated IDA and skip themselves on CI. They are
+what verify that the tools return correct data, that the worker survives hostile
+input, and that the pool neither leaks nor overshoots under load. Run them locally:
+
+```bash
+IDABIN=/path/to/IDA-install scripts/build_check.sh   # all ten steps
+RUN_SCALE=1 IDABIN=... scripts/build_check.sh        # plus the large-binary pass
+```
+
+The script lists every step it skipped, so a green run never reads as a full pass.
+
 ## Build
 
 ### Prerequisites
@@ -143,7 +161,25 @@ Not included by design: debugger tools (use x64dbg/WinDbg) and Python eval (no P
 git clone --branch v9.4.0-release --depth 1 https://github.com/HexRaysSA/ida-sdk.git /path/to/ida-sdk
 ```
 
-### Build environment
+### Continuous integration
+
+`.github/workflows/ci.yml` runs on every push and pull request. A hosted runner has
+no IDA license, so it covers the four steps that need none — the Rust build, the
+lint policy, the C++ worker compiled and linked against the public SDK, and the
+coordinator suite driven by a mock worker.
+
+The other six steps drive a real, activated IDA and skip themselves on CI. They are
+what verify that the tools return correct data, that the worker survives hostile
+input, and that the pool neither leaks nor overshoots under load. Run them locally:
+
+```bash
+IDABIN=/path/to/IDA-install scripts/build_check.sh   # all ten steps
+RUN_SCALE=1 IDABIN=... scripts/build_check.sh        # plus the large-binary pass
+```
+
+The script lists every step it skipped, so a green run never reads as a full pass.
+
+## Build environment
 
 Two variables drive the worker build:
 

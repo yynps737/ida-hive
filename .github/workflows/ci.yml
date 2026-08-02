@@ -1,0 +1,168 @@
+name: ci
+
+# The full gate has ten steps, but six of them drive a real, activated IDA. A hosted
+# runner has no license and no IDA installation, so those steps skip themselves and
+# CI covers the four that do not: both builds, the lint policy, and the coordinator
+# suite against the mock worker.
+#
+# What CI cannot answer — whether the tools return correct data, whether the worker
+# survives hostile input, whether the pool leaks under load — is covered by
+# scripts/build_check.sh on a licensed machine. Keep that in mind before treating a
+# green CI run as a full pass.
+
+on:
+  push:
+    branches: ["**"]
+    tags-ignore: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # The worker builds against the public SDK; only running IDA needs a license.
+  IDA_SDK_TAG: v9.4.0-release
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: Rust build and lints
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: Build
+        run: cargo build --release --locked
+
+      # Cargo.toml denies warnings, but a plain build never evaluates the clippy
+      # lints — this step is what makes that policy binding.
+      - name: Lints
+        run: cargo clippy --release --all-targets --locked
+
+  worker:
+    name: C++ worker against the IDA 9.4 SDK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build
+
+      - name: Clone the public IDA SDK
+        run: |
+          git clone --branch "${IDA_SDK_TAG}" --depth 1 \
+            https://github.com/HexRaysSA/ida-sdk.git "${RUNNER_TEMP}/ida-sdk"
+
+      # The SDK's lib/ holds link-time stubs: enough to compile and link, not enough
+      # to run. That is exactly the coverage this job is for.
+      - name: Build worker
+        env:
+          IDASDK: ${{ runner.temp }}/ida-sdk/src
+        run: |
+          export IDABIN="$IDASDK/lib/x64_linux_64"
+          cmake -S worker -B worker/build-linux -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build worker/build-linux
+
+      - name: Check the worker binary was produced
+        run: test -x worker/build-linux/ida_mcp_worker
+
+      - name: Upload worker
+        uses: actions/upload-artifact@v4
+        with:
+          name: worker-linux
+          path: worker/build-linux/ida_mcp_worker
+          retention-days: 7
+
+  coordinator:
+    name: Coordinator suite (mock worker)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: Build coordinator
+        run: cargo build --release --locked
+
+      # Drives the real coordinator binary over real MCP stdio, with a Python mock
+      # standing in for the C++ worker. Needs no IDA at all.
+      - name: Run suite
+        run: python3 tests/test_coordinator.py
+
+  gate:
+    name: Full gate (license-free steps)
+    runs-on: ubuntu-latest
+    needs: [rust, worker, coordinator]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      # Runs the same script a developer runs. The IDA-dependent steps detect the
+      # absence of an installation and skip, so this asserts that the script itself
+      # stays runnable end to end — a guard against a step that only works locally.
+      - name: build_check.sh
+        run: ./scripts/build_check.sh
+
+      - name: Summarise which steps ran
+        if: always()
+        run: |
+          echo "Steps needing an activated IDA were skipped on this runner."
+          echo "Run scripts/build_check.sh locally for stress, endurance,"
+          echo "tool-correctness, real-IDA integration and scale coverage."
