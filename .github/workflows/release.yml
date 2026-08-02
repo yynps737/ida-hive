@@ -43,7 +43,12 @@ jobs:
 
       - name: Build Linux worker
         run: |
-          cmake -S worker -B worker/build-linux -G Ninja -DIDASDK="${RUNNER_TEMP}/ida-sdk"
+          # IDASDK must name the directory holding include/, which in a git checkout
+          # is <root>/src. Passing the root leaves find_package resolving includes
+          # against a path that does not exist.
+          export IDASDK="${RUNNER_TEMP}/ida-sdk/src"
+          export IDABIN="$IDASDK/lib/x64_linux_64"
+          cmake -S worker -B worker/build-linux -G Ninja -DCMAKE_BUILD_TYPE=Release
           cmake --build worker/build-linux
 
       - name: Rust lints
@@ -106,7 +111,11 @@ jobs:
       - name: Build Windows worker
         shell: pwsh
         run: |
-          cmake -S worker -B worker/build -DIDASDK="$env:RUNNER_TEMP\\ida-sdk"
+          # Same as Linux: point at <root>/src, and at the platform's import
+          # libraries, which live under a per-target directory.
+          $env:IDASDK = "$env:RUNNER_TEMP\\ida-sdk\\src"
+          $env:IDABIN = "$env:IDASDK\\lib\\x64_win_64"
+          cmake -S worker -B worker/build
           cmake --build worker/build --config Release
 
       - name: Build Windows server
