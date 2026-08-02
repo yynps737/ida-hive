@@ -57,7 +57,7 @@ jobs:
           mkdir -p "${pkg_root}"
           install -m 0755 target/release/ida-hive "${pkg_root}/ida-hive"
           install -m 0755 worker/build-linux/ida_mcp_worker "${pkg_root}/ida_mcp_worker"
-          install -m 0644 README.md LICENSE test_smoke.py test_batch.py "${pkg_root}/"
+          install -m 0644 README.md LICENSE tests/live/test_smoke.py tests/live/test_batch.py "${pkg_root}/"
           cat > "${pkg_root}/ida-hive-linux-wrapper.sh" <<'SH'
           #!/usr/bin/env bash
           set -euo pipefail
@@ -119,7 +119,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path $pkgRoot | Out-Null
           Copy-Item target/x86_64-pc-windows-msvc/release/ida-hive.exe $pkgRoot
           Copy-Item worker/build/Release/ida_mcp_worker.exe $pkgRoot
-          Copy-Item README.md, LICENSE, test_smoke.py, test_batch.py $pkgRoot
+          Copy-Item README.md, LICENSE, tests/live/test_smoke.py, tests/live/test_batch.py $pkgRoot
           @'
           @echo off
           setlocal

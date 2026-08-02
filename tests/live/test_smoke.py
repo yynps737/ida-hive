@@ -20,7 +20,10 @@ import tempfile
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parent
+# Repo root: this file lives in tests/live/. In the release tarball it sits at
+# the package root instead, where the binaries are siblings — pass --server /
+# --worker or set IDA_HIVE_SERVER_EXE / IDA_HIVE_WORKER_EXE there.
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def pick_existing(candidates):
