@@ -75,16 +75,21 @@ Claude / Codex / any MCP client
 - `analysis_status` and `wait_analysis` exist for the contract, but because the open is synchronous,
   analysis is normally already complete by the time `open_file` returns.
 
-Measured on Ubuntu 26.04, 18 cores, against IDA 9.2 — these predate the 9.4 migration and
-have not been re-taken:
+Measured on Ubuntu 26.04, 18 cores, against IDA 9.4:
 
-| Input | Size | open_file (raw, incl. analysis) | Functions |
-|-------|------|---------------------------------|-----------|
-| `bash` | 1.5 MB | ~7 s | 3,123 |
-| `libcrypto.so.3` | 6 MB | ~20 s | 12,556 |
-| `python3.14` | 6.8 MB | ~115 s | — |
-| `libclang.so` | 75 MB | ~410 s (~1 GB RSS) | 65,868 |
-| any `.i64/.idb` | — | instant (no analysis) | — |
+| Input | Size | open_file (raw, incl. analysis) | Functions | Peak RSS |
+|-------|------|---------------------------------|-----------|----------|
+| `grep` | 0.2 MB | ~2 s | 547 | 140 MB |
+| `libjavascriptcoregtk` | 30 MB | ~345 s | 40,735 | 640 MB |
+| `libQt6WebEngineCore` | 198 MB | ~1100 s | 454,461 | 2.1 GB |
+| any `.i64/.idb` | — | instant (no analysis) | — | — |
+
+Cost grows sublinearly: 6.5× the input gave 11× the functions but only 3.2× the time and
+3.4× the memory. Query cost does not follow it at all — the table sweeps stay under a
+second at 454k functions, because every listing tool clamps its result and pages the rest.
+
+Earlier figures taken against IDA 9.2 (`bash` 1.5 MB / ~7 s, `libclang.so` 75 MB / ~410 s /
+~1 GB) are consistent with the above but were not re-taken after the migration.
 
 Across separate processes these analyses run in parallel; e.g. 8 agents each opening the same 6 MB
 library concurrently completed in ~44 s wall.
