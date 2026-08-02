@@ -15,6 +15,7 @@ Requires only `cargo build --release` to have run first.
 import argparse
 import json
 import os
+import signal
 import re
 import subprocess
 import sys
@@ -850,6 +851,48 @@ def test_worker_crash_recovery():
         check(len(instances) == 1 and instances[0]["alive"],
               f"dead slot was not pruned: {instances}")
         check(wait_until(lambda: not db_dir.exists()), f"dead worker's db dir leaked: {db_dir}")
+
+
+@test
+def test_external_sigkill_is_recovered():
+    """A worker killed from outside is detected, reaped, and its seat returned."""
+    with tempfile.TemporaryDirectory() as td, McpClient(IDA_MCP_MAX_SLOTS="2") as c:
+        binary = make_bin(td, "extkill.bin")
+        opened = c.call("open_file", path=str(binary), session="s1")
+        db_dir = Path(opened["info"]["db_dir"])
+
+        pids = mock_worker_pids()
+        check(pids, "no worker process found to kill")
+        os.kill(pids[0], signal.SIGKILL)
+
+        # The coordinator learns of the death through the closed stdout, not a poll.
+        check(wait_until(lambda: err_of(c.call("get_info", session="s1")) is not None, timeout=10),
+              "calls kept succeeding after an external SIGKILL")
+
+        # The seat must come back, or the pool leaks capacity on every crash.
+        second = make_bin(td, "extkill2.bin")
+        third = make_bin(td, "extkill3.bin")
+        check(not err_of(c.call("open_file", path=str(second), session="s2")),
+              "could not open after an external kill")
+        check(not err_of(c.call("open_file", path=str(third), session="s3")),
+              "capacity was not released by the killed worker — the seat leaked")
+        check(not db_dir.exists() or not any(db_dir.iterdir()),
+              f"killed worker's database dir was not cleaned: {db_dir}")
+
+
+@test
+def test_repeated_external_kills_do_not_exhaust_capacity():
+    """Every crash must return its seat; otherwise the pool dies by attrition."""
+    with tempfile.TemporaryDirectory() as td, McpClient(IDA_MCP_MAX_SLOTS="2") as c:
+        for i in range(6):
+            binary = make_bin(td, f"attrition{i}.bin")
+            opened = c.call("open_file", path=str(binary), session=f"a{i}")
+            check(not err_of(opened),
+                  f"open {i} failed — capacity leaked after {i} crashes: {opened}")
+            pids = mock_worker_pids()
+            check(pids, f"round {i}: no worker to kill")
+            os.kill(pids[-1], signal.SIGKILL)
+            wait_until(lambda: err_of(c.call("get_info", session=f"a{i}")) is not None, timeout=10)
 
 
 @test
