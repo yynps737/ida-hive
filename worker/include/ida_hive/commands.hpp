@@ -25,5 +25,7 @@ void register_microcode_commands(CommandDispatcher &dispatcher);
 void register_dscu_commands(CommandDispatcher &dispatcher);
 void register_string_commands(CommandDispatcher &dispatcher);
 void register_indexer_commands(CommandDispatcher &dispatcher);
+void register_signature_commands(CommandDispatcher &dispatcher);
+void register_offset_commands(CommandDispatcher &dispatcher);
 
 }  // namespace ida_hive
