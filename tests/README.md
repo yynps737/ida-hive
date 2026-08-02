@@ -9,7 +9,7 @@ an activated IDA Pro license.
 | Layer | How | Coverage |
 |-------|-----|----------|
 | Rust coordinator | `tests/test_coordinator.py` drives the **real** `ida-hive` binary over real MCP stdio, with `tests/mock_worker.py` standing in for the C++ worker | MCP surface, session routing, path dedup, refcounted teardown, concurrency, timeouts, crash recovery, temp-dir lifecycle, batch_convert |
-| C++ worker build | `scripts/build_check.sh` compiles **and links** `worker/` against the real public IDA 9.2 SDK via the repo's own `worker/CMakeLists.txt` | The C++ uses the IDA 9.2 API correctly (signatures, types, headers); the documented build path works |
+| C++ worker build | `scripts/build_check.sh` compiles **and links** `worker/` against the real public IDA 9.4 SDK via the repo's own `worker/CMakeLists.txt` | The C++ uses the IDA 9.4 API correctly (signatures, types, headers); the documented build path works |
 | Worker startup | `build_check.sh` runs the linked worker up to `idalib init_library()` | The binary is well-formed right up to the license gate |
 
 `scripts/build_check.sh` runs all of the above in one shot and clones the public

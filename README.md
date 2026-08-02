@@ -6,18 +6,15 @@ Each binary or database you open gets its own dedicated `idalib` worker process.
 switching, no GIL, no Python runtime. AI models can query saved `.i64/.idb` databases — or raw
 binaries that IDA can load directly — through a single MCP endpoint.
 
-> **Requires IDA Pro 9.2+** with a valid license. This project uses the IDA SDK `idalib` API.
+> **Requires IDA Pro 9.4** with a valid license. This project uses the IDA SDK `idalib` API.
 > No SDK source code or binaries are included.
 
 ## Platform status
 
-- **Linux**: built and validated from source on Ubuntu 26.04 with IDA Pro 9.2 and the public
-  `HexRaysSA/ida-sdk` tag `v9.2.0-sdk.1`. The behavior and measurements in this README come from
-  that validation.
-- **SDK version vs runtime version**: the worker is compiled against the 9.2 SDK, which is the
-  oldest runtime it supports — not a cap. A 9.2-SDK build has been smoke-tested against an IDA 9.4
-  runtime (`init_library`, `open_database`, `get_info`, `list_funcs`) with no ABI trouble. The
-  public SDK currently tags no 9.4 release; `v9.3.1-sdk.1` is the newest available.
+- **Target**: IDA 9.4 only. The worker builds against the public `HexRaysSA/ida-sdk` tag
+  `v9.4.0-release` and is not tested on earlier runtimes. 9.4 replaced the SDK's
+  `bootstrap.cmake` with `cmake/idasdk_init.cmake`, so 9.2 and 9.3 no longer configure.
+- **Linux**: built and validated from source on Ubuntu 26.04.
 - **Windows**: supported by the same codebase; release assets and the original performance numbers
   were Windows-first. The Windows build path below is unchanged but was not re-validated here.
 - **Single codebase**: one MCP contract and one tool surface across both platforms.
@@ -78,7 +75,8 @@ Claude / Codex / any MCP client
 - `analysis_status` and `wait_analysis` exist for the contract, but because the open is synchronous,
   analysis is normally already complete by the time `open_file` returns.
 
-Measured during this validation (Ubuntu 26.04, 18 cores, IDA 9.2):
+Measured on Ubuntu 26.04, 18 cores, against IDA 9.2 — these predate the 9.4 migration and
+have not been re-taken:
 
 | Input | Size | open_file (raw, incl. analysis) | Functions |
 |-------|------|---------------------------------|-----------|
@@ -118,8 +116,8 @@ Not included by design: debugger tools (use x64dbg/WinDbg) and Python eval (no P
 
 ### Prerequisites
 
-- IDA Pro 9.2+ installed and activated
-- The IDA SDK `v9.2.0-sdk.1` tree (below)
+- IDA Pro 9.4 installed and activated
+- The IDA SDK `v9.4.0-release` tree (below)
 - CMake 3.27+
 - Rust toolchain (`rustup`)
 - GCC/Clang on Linux, or MSVC 2022+ on Windows
@@ -127,8 +125,7 @@ Not included by design: debugger tools (use x64dbg/WinDbg) and Python eval (no P
 ### SDK setup
 
 ```bash
-git clone --branch v9.2.0-sdk.1 --depth 1 https://github.com/HexRaysSA/ida-sdk.git /path/to/ida-sdk
-git -C /path/to/ida-sdk submodule update --init --recursive
+git clone --branch v9.4.0-release --depth 1 https://github.com/HexRaysSA/ida-sdk.git /path/to/ida-sdk
 ```
 
 ### Build environment
