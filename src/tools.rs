@@ -557,6 +557,206 @@ pub struct BatchConvertReq {
     pub max_analysis_seconds: Option<i64>,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct MicrocodeReq {
+    #[schemars(description = "Address in hex or a function/symbol name")]
+    pub ea: String,
+    #[serde(default)]
+    #[schemars(description = "Maturity level: generated, preoptimized, locopt, calls, glbopt1, glbopt2, glbopt3 (default), lvars. Earlier levels show more, less optimized microcode.")]
+    pub maturity: Option<String>,
+    #[serde(default)]
+    #[schemars(description = "Maximum microinstructions to return")]
+    pub limit: Option<i64>,
+    #[serde(default)]
+    #[schemars(description = "Session identifier")]
+    pub session: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct RegValueReq {
+    #[schemars(description = "Address in hex or a function/symbol name")]
+    pub ea: String,
+    #[schemars(description = "Register name, e.g. 'rax', 'esi'")]
+    pub reg: String,
+    #[serde(default)]
+    #[schemars(description = "Session identifier")]
+    pub session: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct LimitOnlyReq {
+    #[serde(default)]
+    #[schemars(description = "Maximum entries to return")]
+    pub limit: Option<i64>,
+    #[serde(default)]
+    #[schemars(description = "Session identifier")]
+    pub session: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct StringsReq {
+    #[serde(default)]
+    #[schemars(description = "Maximum strings to return")]
+    pub limit: Option<i64>,
+    #[serde(default)]
+    #[schemars(description = "Skip this many matches before returning")]
+    pub offset: Option<i64>,
+    #[serde(default)]
+    #[schemars(description = "Minimum string length")]
+    pub min_length: Option<i64>,
+    #[serde(default)]
+    #[schemars(description = "Substring the text must contain")]
+    pub filter: Option<String>,
+    #[serde(default)]
+    #[schemars(description = "Session identifier")]
+    pub session: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct FunctionOriginsReq {
+    #[serde(default)]
+    #[schemars(description = "Which functions to return: user (default), library, thunk, or all")]
+    pub kind: Option<String>,
+    #[serde(default)]
+    #[schemars(description = "Maximum functions to return")]
+    pub limit: Option<i64>,
+    #[serde(default)]
+    #[schemars(description = "Session identifier")]
+    pub session: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct SetFuncFlagReq {
+    #[schemars(description = "Address in hex or a function/symbol name")]
+    pub ea: String,
+    #[schemars(description = "Flag name: library, thunk, noret, static, hidden, outline, far, frame")]
+    pub flag: String,
+    #[serde(default)]
+    #[schemars(description = "Set the flag when true (default), clear it when false")]
+    pub on: Option<bool>,
+    #[serde(default)]
+    #[schemars(description = "Session identifier")]
+    pub session: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct OffsetReq {
+    #[schemars(description = "Address of the item whose operand is being marked")]
+    pub ea: String,
+    #[serde(default)]
+    #[schemars(description = "Operand index, 0 by default")]
+    pub operand: Option<i64>,
+    #[serde(default)]
+    #[schemars(description = "Reference type: off8, off16, off32, off64, low8, low16, high8, high16")]
+    pub r#type: Option<String>,
+    #[serde(default)]
+    #[schemars(description = "Base address the offset is relative to")]
+    pub base: Option<String>,
+    #[serde(default)]
+    #[schemars(description = "Explicit target address")]
+    pub target: Option<String>,
+    #[serde(default)]
+    #[schemars(description = "Session identifier")]
+    pub session: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct OffsetCandidatesReq {
+    #[schemars(description = "Address to start scanning from")]
+    pub start: String,
+    #[serde(default)]
+    #[schemars(description = "Address to stop at; defaults to the end of the database")]
+    pub end: Option<String>,
+    #[serde(default)]
+    #[schemars(description = "Maximum candidates to return")]
+    pub limit: Option<i64>,
+    #[serde(default)]
+    #[schemars(description = "Session identifier")]
+    pub session: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct IndexSearchReq {
+    #[schemars(description = "Text to search for")]
+    pub query: String,
+    #[serde(default)]
+    #[schemars(description = "Matching mode: substring (default) or fuzzy")]
+    pub mode: Option<String>,
+    #[serde(default)]
+    #[schemars(description = "Maximum results")]
+    pub limit: Option<i64>,
+    #[serde(default)]
+    #[schemars(description = "Session identifier")]
+    pub session: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct IndexSearchKindReq {
+    #[schemars(description = "Text to search for")]
+    pub query: String,
+    #[schemars(description = "Index to search: functions, types, names, segments, comments, repeatable_comments")]
+    pub index: String,
+    #[serde(default)]
+    #[schemars(description = "Matching mode: substring (default) or fuzzy")]
+    pub mode: Option<String>,
+    #[serde(default)]
+    #[schemars(description = "Maximum results")]
+    pub limit: Option<i64>,
+    #[serde(default)]
+    #[schemars(description = "Session identifier")]
+    pub session: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct DscImagesReq {
+    #[serde(default)]
+    #[schemars(description = "Substring an image name must contain")]
+    pub filter: Option<String>,
+    #[serde(default)]
+    #[schemars(description = "Only images already mapped into the database")]
+    pub loaded_only: Option<bool>,
+    #[serde(default)]
+    #[schemars(description = "Maximum images to return")]
+    pub limit: Option<i64>,
+    #[serde(default)]
+    #[schemars(description = "Session identifier")]
+    pub session: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct DscImageReq {
+    #[schemars(description = "Image name inside the shared cache")]
+    pub image: String,
+    #[serde(default)]
+    #[schemars(description = "How many dependency levels to follow")]
+    pub depth: Option<i64>,
+    #[serde(default)]
+    #[schemars(description = "Session identifier")]
+    pub session: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ApplySignatureReq {
+    #[schemars(description = "Signature file name, as listed by the signatures tool")]
+    pub name: String,
+    #[serde(default)]
+    #[schemars(description = "Session identifier")]
+    pub session: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct FixupsReq {
+    #[serde(default)]
+    #[schemars(description = "Skip fixups below this address")]
+    pub start: Option<String>,
+    #[serde(default)]
+    #[schemars(description = "Maximum fixups to return")]
+    pub limit: Option<i64>,
+    #[serde(default)]
+    #[schemars(description = "Session identifier")]
+    pub session: Option<String>,
+}
+
 // ---- Tools ----
 
 #[tool_router]
@@ -1044,6 +1244,211 @@ impl IdaMcpServer {
             "total_functions": total_funcs,
             "results": results,
         }).to_string()
+    }
+
+    // ---- Control flow ----
+
+    #[tool(description = "Resolve a switch/jump table at an address: case count, jump table location, default target, and every case target with its function name. Works on the switch instruction or any address inside the idiom. Without this an indirect jump reads as an unresolved branch.")]
+    async fn switch_info(&self, Parameters(EaReq { ea, session }): Parameters<EaReq>) -> String {
+        route(&self.coordinator, session, "switch_info", serde_json::json!({"ea": ea})).await
+    }
+
+    #[tool(description = "List the C++ try/catch and SEH exception blocks in a function, with guarded ranges and handler addresses. This structure appears in neither the disassembly nor the pseudocode.")]
+    async fn try_blocks(&self, Parameters(EaReq { ea, session }): Parameters<EaReq>) -> String {
+        route(&self.coordinator, session, "try_blocks", serde_json::json!({"ea": ea})).await
+    }
+
+    #[tool(description = "Ask IDA's value propagation what a register holds at an address. Returns the constant when one can be proven, otherwise reports that it is not constant there.")]
+    async fn reg_value(&self, Parameters(RegValueReq { ea, reg, session }): Parameters<RegValueReq>) -> String {
+        route(&self.coordinator, session, "reg_value", serde_json::json!({"ea": ea, "reg": reg})).await
+    }
+
+    #[tool(description = "List the addresses IDA flagged as questionable during analysis: unresolved jumps, bad stack pointers, undisassembled code. A good starting point for finding where analysis went wrong.")]
+    async fn problems(&self, Parameters(LimitOnlyReq { limit, session }): Parameters<LimitOnlyReq>) -> String {
+        let mut p = serde_json::json!({});
+        if let Some(l) = limit { p["limit"] = l.into(); }
+        route(&self.coordinator, session, "problems", p).await
+    }
+
+    #[tool(description = "List relocations, showing which operands the loader rewrites at load time and what they point at.")]
+    async fn fixups(&self, Parameters(FixupsReq { start, limit, session }): Parameters<FixupsReq>) -> String {
+        let mut p = serde_json::json!({});
+        if let Some(s) = start { p["start"] = s.into(); }
+        if let Some(l) = limit { p["limit"] = l.into(); }
+        route(&self.coordinator, session, "fixups", p).await
+    }
+
+    #[tool(description = "Read the segment register values in effect at an address. Relevant on segmented architectures, where addressing depends on them.")]
+    async fn seg_regs(&self, Parameters(EaReq { ea, session }): Parameters<EaReq>) -> String {
+        route(&self.coordinator, session, "seg_regs", serde_json::json!({"ea": ea})).await
+    }
+
+    // ---- Microcode ----
+
+    #[tool(description = "Dump the decompiler's microcode for a function, block by block. Microcode is the IR the pseudocode is built from and exposes call arguments, register liveness and optimization steps that the printed C hides. Use an earlier maturity to see the unoptimized form.")]
+    async fn microcode(&self, Parameters(MicrocodeReq { ea, maturity, limit, session }): Parameters<MicrocodeReq>) -> String {
+        let mut p = serde_json::json!({"ea": ea});
+        if let Some(m) = maturity { p["maturity"] = m.into(); }
+        if let Some(l) = limit { p["limit"] = l.into(); }
+        route(&self.coordinator, session, "microcode", p).await
+    }
+
+    #[tool(description = "Microcode shape only — block and instruction counts at a given maturity, without the listing. Cheap enough to run across many functions.")]
+    async fn microcode_stats(&self, Parameters(MicrocodeReq { ea, maturity, limit: _, session }): Parameters<MicrocodeReq>) -> String {
+        let mut p = serde_json::json!({"ea": ea});
+        if let Some(m) = maturity { p["maturity"] = m.into(); }
+        route(&self.coordinator, session, "microcode_stats", p).await
+    }
+
+    #[tool(description = "List the microcode maturity levels in the order the decompiler runs them, so a caller can pick one without guessing at names.")]
+    async fn microcode_maturities(&self, Parameters(SessionReq { session }): Parameters<SessionReq>) -> String {
+        route(&self.coordinator, session, "microcode_maturities", serde_json::json!({})).await
+    }
+
+    // ---- Strings ----
+
+    #[tool(description = "List strings with address, length, encoding and text. Includes strings the decompiler recovered, which carry no bytes at their address and are marked from_decompiler.")]
+    async fn strings(&self, Parameters(StringsReq { limit, offset, min_length, filter, session }): Parameters<StringsReq>) -> String {
+        let mut p = serde_json::json!({});
+        if let Some(l) = limit { p["limit"] = l.into(); }
+        if let Some(o) = offset { p["offset"] = o.into(); }
+        if let Some(m) = min_length { p["min_length"] = m.into(); }
+        if let Some(f) = filter { p["filter"] = f.into(); }
+        route(&self.coordinator, session, "strings", p).await
+    }
+
+    #[tool(description = "Only the strings the decompiler reconstructed — assembled at runtime or stored in a form no data scan finds. The list fills lazily, so decompile the functions of interest first.")]
+    async fn strings_decompiled(&self, Parameters(LimitOnlyReq { limit, session }): Parameters<LimitOnlyReq>) -> String {
+        let mut p = serde_json::json!({});
+        if let Some(l) = limit { p["limit"] = l.into(); }
+        route(&self.coordinator, session, "strings_decompiled", p).await
+    }
+
+    #[tool(description = "Rebuild the string list. Needed after patching bytes or defining new data, so newly created literals appear.")]
+    async fn strings_rebuild(&self, Parameters(SessionReq { session }): Parameters<SessionReq>) -> String {
+        route(&self.coordinator, session, "strings_rebuild", serde_json::json!({})).await
+    }
+
+    // ---- Signatures and function origins ----
+
+    #[tool(description = "List the FLIRT signature files IDA has loaded and how many functions each matched.")]
+    async fn signatures(&self, Parameters(SessionReq { session }): Parameters<SessionReq>) -> String {
+        route(&self.coordinator, session, "signatures", serde_json::json!({})).await
+    }
+
+    #[tool(description = "Apply a FLIRT signature file by name. Matching is planned and takes effect as analysis next runs over the candidate addresses.")]
+    async fn apply_signature(&self, Parameters(ApplySignatureReq { name, session }): Parameters<ApplySignatureReq>) -> String {
+        route(&self.coordinator, session, "apply_signature", serde_json::json!({"name": name})).await
+    }
+
+    #[tool(description = "Split the function list by origin: user code, FLIRT-matched library code, or thunks. On a statically linked binary this is the fastest way to cut thousands of uninteresting library functions out of view.")]
+    async fn function_origins(&self, Parameters(FunctionOriginsReq { kind, limit, session }): Parameters<FunctionOriginsReq>) -> String {
+        let mut p = serde_json::json!({});
+        if let Some(k) = kind { p["kind"] = k.into(); }
+        if let Some(l) = limit { p["limit"] = l.into(); }
+        route(&self.coordinator, session, "function_origins", p).await
+    }
+
+    #[tool(description = "Read a function's flags by name rather than as a bit mask: library, thunk, noret, static, and so on.")]
+    async fn func_flags(&self, Parameters(EaReq { ea, session }): Parameters<EaReq>) -> String {
+        route(&self.coordinator, session, "func_flags", serde_json::json!({"ea": ea})).await
+    }
+
+    #[tool(description = "Set or clear one function flag. Marking a function as library removes it from the user listing, which is how recognised code is pruned by hand.")]
+    async fn set_func_flag(&self, Parameters(SetFuncFlagReq { ea, flag, on, session }): Parameters<SetFuncFlagReq>) -> String {
+        let mut p = serde_json::json!({"ea": ea, "flag": flag});
+        if let Some(o) = on { p["on"] = o.into(); }
+        route(&self.coordinator, session, "set_func_flag", p).await
+    }
+
+    // ---- Offsets ----
+
+    #[tool(description = "Mark an operand as an address reference. An unmarked immediate stays a magic number; marking it makes IDA resolve the name, create the xref, and carry it into the pseudocode.")]
+    async fn set_offset(&self, Parameters(OffsetReq { ea, operand, r#type, base, target, session }): Parameters<OffsetReq>) -> String {
+        let mut p = serde_json::json!({"ea": ea});
+        if let Some(o) = operand { p["operand"] = o.into(); }
+        if let Some(t) = r#type { p["type"] = t.into(); }
+        if let Some(b) = base { p["base"] = b.into(); }
+        if let Some(t) = target { p["target"] = t.into(); }
+        route(&self.coordinator, session, "set_offset", p).await
+    }
+
+    #[tool(description = "Remove an operand's reference marking, returning it to a plain number.")]
+    async fn clear_offset(&self, Parameters(OffsetReq { ea, operand, r#type: _, base: _, target: _, session }): Parameters<OffsetReq>) -> String {
+        let mut p = serde_json::json!({"ea": ea});
+        if let Some(o) = operand { p["operand"] = o.into(); }
+        route(&self.coordinator, session, "clear_offset", p).await
+    }
+
+    #[tool(description = "Report whether an operand carries reference info, and what address and name it resolves to.")]
+    async fn get_offset(&self, Parameters(OffsetReq { ea, operand, r#type: _, base: _, target: _, session }): Parameters<OffsetReq>) -> String {
+        let mut p = serde_json::json!({"ea": ea});
+        if let Some(o) = operand { p["operand"] = o.into(); }
+        route(&self.coordinator, session, "get_offset", p).await
+    }
+
+    #[tool(description = "Scan a range for immediates that look like addresses but are not yet marked as references — the sweep that turns an unmarked pointer table into navigable links.")]
+    async fn offset_candidates(&self, Parameters(OffsetCandidatesReq { start, end, limit, session }): Parameters<OffsetCandidatesReq>) -> String {
+        let mut p = serde_json::json!({"start": start});
+        if let Some(e) = end { p["end"] = e.into(); }
+        if let Some(l) = limit { p["limit"] = l.into(); }
+        route(&self.coordinator, session, "offset_candidates", p).await
+    }
+
+    // ---- Global index ----
+
+    #[tool(description = "One query across every index — functions, names, types, segments and comments — with optional fuzzy matching. Replaces a fan-out of per-kind list calls with a single ranked lookup. Note: IDA disables the indexer in headless mode, so this reports unavailable there.")]
+    async fn index_search(&self, Parameters(IndexSearchReq { query, mode, limit, session }): Parameters<IndexSearchReq>) -> String {
+        let mut p = serde_json::json!({"query": query});
+        if let Some(m) = mode { p["mode"] = m.into(); }
+        if let Some(l) = limit { p["limit"] = l.into(); }
+        route(&self.coordinator, session, "index_search", p).await
+    }
+
+    #[tool(description = "The same index query restricted to one kind, for when the kind is already known.")]
+    async fn index_search_kind(&self, Parameters(IndexSearchKindReq { query, index, mode, limit, session }): Parameters<IndexSearchKindReq>) -> String {
+        let mut p = serde_json::json!({"query": query, "index": index});
+        if let Some(m) = mode { p["mode"] = m.into(); }
+        if let Some(l) = limit { p["limit"] = l.into(); }
+        route(&self.coordinator, session, "index_search_kind", p).await
+    }
+
+    #[tool(description = "Report whether the indexer is available and list the index names and matching modes it accepts.")]
+    async fn index_status(&self, Parameters(SessionReq { session }): Parameters<SessionReq>) -> String {
+        route(&self.coordinator, session, "index_status", serde_json::json!({})).await
+    }
+
+    // ---- dyld shared cache ----
+
+    #[tool(description = "Report whether this database is an Apple dyld shared cache, and if so its path, image count and ASLR slide. Returns is_shared_cache false for every other input, so it is safe to call first.")]
+    async fn dsc_status(&self, Parameters(SessionReq { session }): Parameters<SessionReq>) -> String {
+        route(&self.coordinator, session, "dsc_status", serde_json::json!({})).await
+    }
+
+    #[tool(description = "List the images inside a dyld shared cache, marking which are already mapped into the database.")]
+    async fn dsc_images(&self, Parameters(DscImagesReq { filter, loaded_only, limit, session }): Parameters<DscImagesReq>) -> String {
+        let mut p = serde_json::json!({});
+        if let Some(f) = filter { p["filter"] = f.into(); }
+        if let Some(l) = loaded_only { p["loaded_only"] = l.into(); }
+        if let Some(l) = limit { p["limit"] = l.into(); }
+        route(&self.coordinator, session, "dsc_images", p).await
+    }
+
+    #[tool(description = "Identify which image and region an address belongs to inside a shared cache — a question the mapped bytes alone cannot answer.")]
+    async fn dsc_locate(&self, Parameters(EaReq { ea, session }): Parameters<EaReq>) -> String {
+        route(&self.coordinator, session, "dsc_locate", serde_json::json!({"ea": ea})).await
+    }
+
+    #[tool(description = "List an image's link dependencies as recorded by the shared cache.")]
+    async fn dsc_dependencies(&self, Parameters(DscImageReq { image, depth, session }): Parameters<DscImageReq>) -> String {
+        let mut p = serde_json::json!({"image": image});
+        if let Some(d) = depth { p["depth"] = d.into(); }
+        route(&self.coordinator, session, "dsc_dependencies", p).await
+    }
+
+    #[tool(description = "List the regions an image occupies. Images are not contiguous inside a shared cache.")]
+    async fn dsc_regions(&self, Parameters(DscImageReq { image, depth: _, session }): Parameters<DscImageReq>) -> String {
+        route(&self.coordinator, session, "dsc_regions", serde_json::json!({"image": image})).await
     }
 
     // ---- Analysis lifecycle ----
