@@ -91,7 +91,7 @@ library concurrently completed in ~44 s wall.
 
 ## Tools
 
-64 MCP tools across 9 categories. Address arguments (`ea` / `target`) accept **either a hex address
+93 MCP tools across 14 categories. Address arguments (`ea` / `target`) accept **either a hex address
 (`0x...`) or a function/symbol name**.
 
 | Category | Tools | Count |
@@ -105,6 +105,18 @@ library concurrently completed in ~44 s wall.
 | Memory | get_bytes, get_string, patch_bytes, get_int, put_int, get_global_value | 6 |
 | Stack | stack_frame, declare_stack, delete_stack | 3 |
 | Composite | survey_binary, trace_data_flow, analyze_component, diff_before_after | 4 |
+| Control flow | switch_info, try_blocks, reg_value, problems, fixups, seg_regs | 6 |
+| Microcode | microcode, microcode_stats, microcode_maturities | 3 |
+| Strings | strings, strings_decompiled, strings_rebuild | 3 |
+| Signatures | signatures, apply_signature, function_origins, func_flags, set_func_flag | 5 |
+| Offsets | set_offset, clear_offset, get_offset, offset_candidates | 4 |
+| Index | index_search, index_search_kind, index_status | 3 |
+| dyld cache | dsc_status, dsc_images, dsc_locate, dsc_dependencies, dsc_regions | 5 |
+
+The last seven categories reach IDA 9.4 subsystems that earlier releases did not expose. Two carry
+runtime caveats: the indexer is **disabled by IDA under headless/batch mode**, so `index_*` reports
+unavailable there, and the `dsc_*` tools apply only when the database is an Apple dyld shared cache
+(`dsc_status` returns `is_shared_cache: false` otherwise).
 
 Modifications (`rename`, `set_comment`, `set_type`, `patch_bytes`, …) change that worker's in-memory
 database; call `save_idb` to persist. `save_idb` with no path saves next to the original input
