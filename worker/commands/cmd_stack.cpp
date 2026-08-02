@@ -12,7 +12,7 @@
 
 void register_stack_commands(CommandDispatcher& dispatcher)
 {
-    // Read through Hex-Rays lvars; IDA 9.2's frame API does not expose these.
+    // Read through Hex-Rays lvars; the frame API does not expose these.
     dispatcher.register_command("stack_frame", [](const json& params) -> json {
         ea_t ea = parse_ea(params.at("ea"));
         func_t* f = get_func(ea);

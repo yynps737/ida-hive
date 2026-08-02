@@ -114,6 +114,6 @@ void register_modify_commands(CommandDispatcher& dispatcher)
         return {{"ea", ea_hex(ea)}, {"size", size}, {"success", true}};
     });
 
-    // No patch_asm: IDA 9.2 exposes no public C assemble(). patch_bytes takes
-    // pre-assembled hex instead.
+    // No patch_asm yet. processor_t::assemble() exists and could back one; until
+    // then patch_bytes takes pre-assembled hex.
 }
