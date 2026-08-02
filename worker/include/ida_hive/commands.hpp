@@ -21,5 +21,7 @@ void register_type_commands(CommandDispatcher &dispatcher);
 void register_stack_commands(CommandDispatcher &dispatcher);
 void register_composite_commands(CommandDispatcher &dispatcher);
 void register_flow_commands(CommandDispatcher &dispatcher);
+void register_microcode_commands(CommandDispatcher &dispatcher);
+void register_dscu_commands(CommandDispatcher &dispatcher);
 
 }  // namespace ida_hive

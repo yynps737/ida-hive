@@ -45,6 +45,8 @@ ida_add_idalib(ida_mcp_worker
         src/commands/cmd_stack.cpp
         src/commands/cmd_composite.cpp
         src/commands/cmd_flow.cpp
+        src/commands/cmd_microcode.cpp
+        src/commands/cmd_dscu.cpp
 )
 
 # Sources include their own headers as <ida_hive/...>, the same spelling a consumer

@@ -140,6 +140,8 @@ int main(int argc, char* argv[])
     register_stack_commands(dispatcher);
     register_composite_commands(dispatcher);
     register_flow_commands(dispatcher);
+    register_microcode_commands(dispatcher);
+    register_dscu_commands(dispatcher);
 
     dispatcher.register_command("ping", [](const json& params) -> json {
         return {{"pong", true}};
