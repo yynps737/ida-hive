@@ -5,8 +5,10 @@ edition = "2021"
 description = "Native multi-instance IDA Pro MCP server — Rust coordinator + C++ idalib workers"
 
 [dependencies]
-# MCP protocol
-rmcp = { version = "0.1", features = ["server", "transport-io"] }
+# MCP protocol — rmcp 3.x targets the 2026-07-28 spec. The "schemars" feature
+# re-exports schemars so tool parameter structs derive JsonSchema without a
+# separate, version-skewed schemars dependency.
+rmcp = { version = "3.1", features = ["server", "macros", "transport-io", "schemars"] }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }

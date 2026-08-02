@@ -62,7 +62,7 @@ async fn main() -> Result<()> {
     info!(max_slots = config.max_slots, worker = %config.worker_exe, "Starting coordinator");
 
     let coordinator = Arc::new(Coordinator::new(config));
-    let server = IdaMcpServer { coordinator };
+    let server = IdaMcpServer::new(coordinator);
 
     // Serve MCP protocol over stdio
     let transport = rmcp::transport::io::stdio();
