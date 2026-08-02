@@ -3,8 +3,7 @@
 ## Branch `fix/concurrency-and-locking`
 
 Two waves of fixes. The concurrency/lifecycle work and the tool-surface work are independent and
-were each verified (live MCP round-trips + the project smoke script). Per-bug detail and reproduction
-steps are in `BUGS.md`.
+were each verified (live MCP round-trips + the project smoke script).
 
 ### Concurrency, locking & lifecycle
 
@@ -75,7 +74,6 @@ steps are in `BUGS.md`.
   measured analysis timings, and a behavior/limitations section.
 - The MCP server `instructions` and the `open_file` tool description were corrected to match (they
   previously claimed background analysis / immediate return).
-- `BUGS.md` records each tool bug with status, source location, and fix.
 
 ### Known / not changed
 

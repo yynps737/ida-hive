@@ -279,8 +279,8 @@ level, so from an extracted package the path is just `python test_smoke.py`.
 See `tests/README.md` for the license-free coordinator suite.
 
 This branch additionally went through a multi-agent production-validation pass that drove the live
-tools against real binaries; it found and fixed 19 tool-surface correctness bugs (see `CHANGELOG.md`
-and `BUGS.md`).
+tools against real binaries; it found and fixed 19 tool-surface correctness bugs (see
+`CHANGELOG.md`).
 
 ## License
 

@@ -68,7 +68,7 @@ them separately from real failures.
 
 ## Findings from this pass
 
-See `../BUGS.md`. In brief, the license-free validation surfaced:
+The license-free validation surfaced:
 
 - **[FIXED] `server_health` reported `max_slots: 100` unconditionally**
   (`src/tools.rs`), ignoring `IDA_MCP_MAX_SLOTS` / `config.max_slots`. Now reports
