@@ -158,7 +158,8 @@ int main(int argc, char* argv[])
         return {{"shutdown", true}};
     });
 
-    // Never blocks. Reports done immediately unless a later analysis pass was queued.
+    // Never blocks. Reports the analysis queues as they stand; work queued after the
+    // initial pass stays pending until wait_analysis drives it.
     dispatcher.register_command("analysis_status", [](const json& params) -> json {
         bool done = auto_is_ok();
 
@@ -191,6 +192,7 @@ int main(int argc, char* argv[])
                 case AU_LBF3:   state_name = "AU_LBF3";   break;
                 case AU_CHLB:   state_name = "AU_CHLB";   break;
                 case AU_FINAL:  state_name = "AU_FINAL";  break;
+                case AU_NONE:   state_name = "none";      break;
                 default:        state_name = "other";     break;
             }
 
@@ -217,6 +219,9 @@ int main(int argc, char* argv[])
     // emitting analysis_progress events meanwhile. Returns at once in the common case,
     // since open_database already ran the initial pass.
     dispatcher.register_command("wait_analysis", [](const json& params) -> json {
+        if (!auto_is_ok())
+            auto_wait_range(inf_get_min_ea(), inf_get_max_ea());
+
         if (auto_is_ok())
         {
             return {
@@ -289,8 +294,12 @@ int main(int argc, char* argv[])
                 send_event("analysis_progress", progress);
             }
 
-            // Yields rather than spinning; the analysis owns this thread otherwise.
-            qsleep(500);
+            // idalib has no background analysis thread: the queues are drained only
+            // when the host asks for it. Polling auto_is_ok() alone would therefore
+            // spin to the timeout on anything queued after the initial pass, such as
+            // the re-analysis a type change schedules.
+            if (auto_wait_range(inf_get_min_ea(), inf_get_max_ea()) == 0 && !auto_is_ok())
+                auto_wait();  // Queued outside the database range.
         }
     });
 
