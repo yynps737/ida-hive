@@ -9,10 +9,10 @@ an activated IDA Pro license.
 | Layer | How | Coverage |
 |-------|-----|----------|
 | Rust coordinator | `tests/test_coordinator.py` drives the **real** `ida-hive` binary over real MCP stdio, with `tests/mock_worker.py` standing in for the C++ worker | MCP surface, session routing, path dedup, refcounted teardown, concurrency, timeouts, crash recovery, temp-dir lifecycle, batch_convert |
-| C++ worker build | `tests/build_check.sh` compiles **and links** `worker/` against the real public IDA 9.2 SDK via the repo's own `worker/CMakeLists.txt` | The C++ uses the IDA 9.2 API correctly (signatures, types, headers); the documented build path works |
+| C++ worker build | `scripts/build_check.sh` compiles **and links** `worker/` against the real public IDA 9.2 SDK via the repo's own `worker/CMakeLists.txt` | The C++ uses the IDA 9.2 API correctly (signatures, types, headers); the documented build path works |
 | Worker startup | `build_check.sh` runs the linked worker up to `idalib init_library()` | The binary is well-formed right up to the license gate |
 
-`tests/build_check.sh` runs all of the above in one shot and clones the public
+`scripts/build_check.sh` runs all of the above in one shot and clones the public
 SDK automatically if `IDASDK` is unset. Nothing in the test tree needs or
 touches a license file.
 
@@ -25,8 +25,16 @@ clean `init_error` and never opens a database. `mock_worker.py` exists precisely
 to exercise the coordinator around this gate; it does **not** reproduce IDA's
 analysis output.
 
-To validate the real tools, run the license-bearing scripts on an activated
-machine: `python test_smoke.py /path/to/binary`.
+To validate the real tools, run the license-bearing scripts in `tests/live/` on
+an activated machine: `python tests/live/test_smoke.py /path/to/binary`.
+
+## Layout
+
+| Path | License needed | Purpose |
+|------|----------------|---------|
+| `tests/test_coordinator.py`, `tests/mock_worker.py` | no | coordinator suite over real MCP stdio |
+| `scripts/build_check.sh` | no | C++ worker compile + link + startup |
+| `tests/live/` | **yes** | real-tool validation; also shipped at the top level of the release tarball |
 
 ## The mock worker
 
@@ -50,8 +58,8 @@ cargo build --release            # once
 python3 tests/test_coordinator.py            # coordinator suite
 python3 tests/test_coordinator.py -k dedup   # filter
 python3 tests/test_coordinator.py -v         # tracebacks
-tests/build_check.sh                          # everything license-free
-SKIP_WORKER=1 tests/build_check.sh            # coordinator only, no SDK/C++ build
+scripts/build_check.sh                          # everything license-free
+SKIP_WORKER=1 scripts/build_check.sh            # coordinator only, no SDK/C++ build
 ```
 
 Known product bugs are asserted as `xfail` tests: they pass while the bug

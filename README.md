@@ -262,13 +262,17 @@ AI:   → batch_convert(paths=[…], output_dir="…/i64", concurrency=4)
 Local smoke / batch scripts (cross-platform MCP round-trips):
 
 ```bash
-python test_smoke.py /path/to/binary
-python test_batch.py /path/to/binary1 /path/to/binary2
+python tests/live/test_smoke.py /path/to/binary
+python tests/live/test_batch.py /path/to/binary1 /path/to/binary2
 ```
 
-- `test_smoke.py` — open → analyze → survey → decompile → batch_convert → close.
-- `test_batch.py` — exercises `batch_convert` end-to-end.
-- `test_full_e2e.sh` — a deeper, Windows-oriented sample for a known PE target.
+- `tests/live/test_smoke.py` — open → analyze → survey → decompile → batch_convert → close.
+- `tests/live/test_batch.py` — exercises `batch_convert` end-to-end.
+- `scripts/full_e2e_sample.sh` — a deeper, Windows-oriented sample for a known PE target.
+
+These need an activated IDA license. The release tarball ships them at its top
+level, so from an extracted package the path is just `python test_smoke.py`.
+See `tests/README.md` for the license-free coordinator suite.
 
 This branch additionally went through a multi-agent production-validation pass that drove the live
 tools against real binaries; it found and fixed 19 tool-surface correctness bugs (see `CHANGELOG.md`

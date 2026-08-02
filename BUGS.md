@@ -158,7 +158,7 @@ crash/hang/leak. Suggest a separate "tool-surface fixes" PR.
 
 ## Appendix — license-free validation pass (coordinator suite + C++ build/static analysis)
 
-Found without an activated IDA license, via `tests/build_check.sh`
+Found without an activated IDA license, via `scripts/build_check.sh`
 (cargo build + real-SDK CMake build of the worker + `clang-tidy`/`-Wall -Wextra`)
 and the `tests/test_coordinator.py` end-to-end suite. These are separate from the
 tool-surface bugs above.
