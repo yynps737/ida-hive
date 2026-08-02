@@ -508,6 +508,41 @@ def test_workers_exit_when_server_exits():
               f"worker processes leaked after shutdown: {during}")
 
 
+@test
+def test_sigterm_removes_worker_db_dirs():
+    """A signal must reap the workers and their databases, not strand them.
+
+    The directories are removed by Slot::drop, which terminating on the default
+    disposition never reaches: no unwinding, no destructors. Clients stop their MCP
+    servers with a signal, so without a handler every restart leaks one database per
+    open session — gigabytes of it for a real binary, on a /tmp that is a RAM disk on
+    most systems.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        one = make_bin(td, "sigterm1.bin")
+        two = make_bin(td, "sigterm2.bin")
+        before = set(mock_worker_pids())
+        c = McpClient()
+        a = c.call("open_file", path=str(one), session="a")
+        b = c.call("open_file", path=str(two), session="b")
+        dirs = [Path(a["info"]["db_dir"]), Path(b["info"]["db_dir"])]
+        check(all(d.is_dir() for d in dirs), f"db dirs missing before the signal: {dirs}")
+        spawned = set(mock_worker_pids()) - before
+
+        c.proc.send_signal(signal.SIGTERM)
+        try:
+            c.proc.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            c.proc.kill()
+            c.proc.wait(timeout=5)
+            raise AssertionError("the server did not exit on SIGTERM")
+
+        leaked = [d for d in dirs if wait_until(lambda d=d: not d.exists(), timeout=10) is False]
+        check(not leaked, f"db dir(s) left behind after SIGTERM: {leaked}")
+        check(wait_until(lambda: not (set(mock_worker_pids()) & spawned), timeout=10),
+              f"worker processes survived SIGTERM: {spawned}")
+
+
 # ---- 4. Concurrency ----
 
 @test
