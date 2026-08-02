@@ -21,25 +21,39 @@ namespace ida_hive {
 namespace {
 
 // Reads one jump-table slot. Entries are stored at the table's element width, not
-// always pointer width.
-uint64 read_table_slot(ea_t slot, int element_size)
+// always pointer width, and SWI_SIGNED decides how a narrow entry extends.
+//
+// Sign extension is not cosmetic: a compiler emitting `movsxd` stores negative
+// displacements, and reading 0xFFFFF1BC as unsigned puts every target 4 GiB above
+// where it belongs.
+int64 read_table_slot(ea_t slot, int element_size, bool is_signed)
 {
     switch (element_size)
     {
-        case 1:  return get_byte(slot);
-        case 2:  return get_word(slot);
-        case 4:  return get_dword(slot);
-        default: return get_qword(slot);
+        case 1:  return is_signed ? (int64)(int8)get_byte(slot)   : (int64)get_byte(slot);
+        case 2:  return is_signed ? (int64)(int16)get_word(slot)  : (int64)get_word(slot);
+        case 4:  return is_signed ? (int64)(int32)get_dword(slot) : (int64)get_dword(slot);
+        default: return (int64)get_qword(slot);
     }
 }
 
-// Table entries are offsets under the shift encoded in flags, relative to elbase;
-// the switch segment's base stands in when SWI_ELBASE is unset.
-ea_t decode_target(const switch_info_t &si, uint64 raw)
+// Turns a table entry into the address it denotes.
+//
+// Three flags decide the arithmetic, and getting any of them wrong yields a
+// plausible-looking address that points nowhere:
+//   SWI_SELFREL  the entry is relative to its own slot, not to elbase
+//   SWI_ELBASE   elbase is meaningful; otherwise the base is zero
+//   SWI_SUBTRACT the entry is subtracted from the base instead of added
+ea_t decode_target(const switch_info_t &si, ea_t slot, int64 raw)
 {
-    ea_t base = (si.flags & SWI_ELBASE) != 0 ? si.elbase : 0;
-    ea_t off  = (ea_t)(raw << si.get_shift());
-    return si.is_subtract() ? base - off : base + off;
+    const ea_t base = (si.flags & SWI_SELFREL) != 0 ? slot
+                    : (si.flags & SWI_ELBASE)  != 0 ? si.elbase
+                                                    : 0;
+    const int64 off = raw << si.get_shift();
+    // Wrapping is intentional: the sum is an address, and a negative displacement
+    // is normal for a self-relative or elbase-relative table.
+    return si.is_subtract() ? (ea_t)((int64)base - off)
+                            : (ea_t)((int64)base + off);
 }
 
 json switch_targets(const switch_info_t &si)
@@ -50,35 +64,69 @@ json switch_targets(const switch_info_t &si)
         return targets;
 
     const int esize = si.get_jtable_element_size();
+    const bool is_signed = (si.flags & SWI_SIGNED) != 0;
     for (int i = 0; i < count && targets.size() < 4096; i++)
     {
-        ea_t tgt = decode_target(si, read_table_slot(si.jumps + (ea_t)i * esize, esize));
+        const ea_t slot = si.jumps + (ea_t)i * esize;
+        const ea_t tgt = decode_target(si, slot, read_table_slot(slot, esize, is_signed));
+
+        // A target outside the database means the decode was wrong, not that the
+        // switch has an exotic case. Saying so beats emitting an address that looks
+        // real and resolves to nothing.
+        const bool mapped = tgt >= inf_get_min_ea() && tgt < inf_get_max_ea();
         qstring nm;
-        get_func_name(&nm, tgt);
-        targets.push_back({
+        if (mapped)
+            get_func_name(&nm, tgt);
+
+        json entry = {
             { "index",  i },
             { "target", ea_hex(tgt) },
             { "func",   nm.empty() ? json(nullptr) : json(nm.c_str()) },
-        });
+        };
+        if (!mapped)
+            entry["out_of_range"] = true;
+        targets.push_back(entry);
     }
     return targets;
+}
+
+// The address holding the switch info, for any address in the idiom.
+//
+// get_switch_info answers only at the indirect jump. get_switch_parent extends that
+// to the jump targets and no further — the SDK documents it as "Used at the jump
+// targets". The idiom's own body, the bounds check and the table load, resolves
+// through neither, so it is found by walking forward to the jump the idiom ends at.
+ea_t find_switch(switch_info_t *si, ea_t ea)
+{
+    if (get_switch_info(si, ea) > 0)
+        return ea;
+
+    const ea_t parent = get_switch_parent(ea);
+    if (parent != BADADDR && get_switch_info(si, parent) > 0)
+        return parent;
+
+    // Bounded by the containing function: an idiom does not span one.
+    const func_t *pfn = get_func(ea);
+    if (pfn == nullptr)
+        return BADADDR;
+
+    for (ea_t cur = ea; cur < pfn->end_ea; cur = next_head(cur, pfn->end_ea))
+        if (get_switch_info(si, cur) > 0 && si->startea <= ea)
+            return cur;
+
+    return BADADDR;
 }
 
 // Resolves the indirect branch IDA's analysis already recovered, so a switch reads
 // as its case targets instead of an unresolved jump.
 json cmd_switch_info(const json &params)
 {
-    ea_t ea = require_ea(params);
+    const ea_t query = require_ea(params);
 
     switch_info_t si;
-    if (get_switch_info(&si, ea) <= 0)
-    {
-        // An address inside the idiom still resolves through its parent.
-        ea_t parent = get_switch_parent(ea);
-        if (parent == BADADDR || get_switch_info(&si, parent) <= 0)
-            return { { "ea", ea_hex(ea) }, { "is_switch", false } };
-        ea = parent;
-    }
+    const ea_t ea = find_switch(&si, query);
+    if (ea == BADADDR)
+        return { { "ea", ea_hex(query) }, { "is_switch", false } };
 
     return {
         { "ea",            ea_hex(ea) },
