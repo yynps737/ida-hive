@@ -352,6 +352,80 @@ def _(w):
     return f"{len(regs)} segment registers"
 
 
+
+# ---- Database internals ----
+
+@check("netnode: a node you own round-trips; IDA's own are refused")
+def _(w):
+    name = "idahive_functional_probe"
+    w("netnode_set", name=name, value="probe-value")
+    got = w("netnode_get", name=name)
+    assert_(got["value"] == "probe-value", f"value came back as {got.get('value')!r}")
+    assert_(not got["reserved"], "a self-named node was reported as reserved")
+
+    # Writing to IDA's own storage must be refused, not attempted.
+    refused = w.try_call("netnode_set", name="$ imports", value="x")
+    assert_(refused is None, "a reserved netnode accepted a write")
+    return "round-trip clean, reserved node protected"
+
+
+@check("netnode_list: reserved nodes are flagged, and can be filtered out")
+def _(w):
+    everything = w("netnode_list", limit=200)
+    reserved = [n for n in everything["nodes"] if n["reserved"]]
+    for n in reserved:
+        assert_(n["name"].startswith("$ "), f"{n['name']!r} flagged reserved without the prefix")
+
+    without = w("netnode_list", limit=200, include_reserved=False)
+    assert_(all(not n["reserved"] for n in without["nodes"]),
+            "include_reserved=false still returned reserved nodes")
+    assert_(without["returned"] <= everything["returned"],
+            "excluding reserved nodes returned more entries")
+    return f"{len(reserved)}/{everything['returned']} reserved"
+
+
+@check("parser_status: the language list is stable and non-empty")
+def _(w):
+    s = w("parser_status")
+    assert_(s["languages"], "no source languages reported")
+    for lang in ("c", "cpp", "swift", "go"):
+        assert_(lang in s["languages"], f"{lang} missing from the language list")
+    return f"{len(s['languages'])} languages"
+
+
+@check("select_parser: an unknown language is refused, not silently ignored")
+def _(w):
+    assert_(w.try_call("select_parser", language="cobol") is None,
+            "an unknown language was accepted")
+    return "unknown language refused"
+
+
+@check("undo: status is consistent with what undo/redo will do")
+def _(w):
+    before = w("undo_status")
+    assert_(isinstance(before["can_undo"], bool) and isinstance(before["can_redo"], bool),
+            "can_undo/can_redo are not booleans")
+    assert_((before["undo"] is not None) == before["can_undo"],
+            "a label is present exactly when undo is possible")
+
+    # Undoing with nothing to undo must fail rather than report a false success.
+    if not before["can_undo"]:
+        assert_(w.try_call("undo") is None, "undo succeeded with an empty history")
+    return f"can_undo={before['can_undo']}"
+
+
+@check("undo_point: creating a point makes undo available")
+def _(w):
+    w("undo_point", tag="functional-probe")
+    f = w("function_origins", kind="user", limit=1)["functions"][0]
+    w("set_comment", ea=f["ea"], comment="undo probe")
+    after = w("undo_status")
+    assert_(after["can_undo"], "an edit after an undo point left nothing to undo")
+    # The label comes from IDA's own record of the edits, not from the tag above.
+    assert_(after["undo"] is not None, "can_undo is set but no label field came back")
+    return "an edit after a point becomes undoable"
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--worker", default=str(ROOT / "worker" / "build-linux" / "ida_mcp_worker"))

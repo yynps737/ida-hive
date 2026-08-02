@@ -91,7 +91,7 @@ library concurrently completed in ~44 s wall.
 
 ## Tools
 
-93 MCP tools across 14 categories. Address arguments (`ea` / `target`) accept **either a hex address
+103 MCP tools across 15 categories. Address arguments (`ea` / `target`) accept **either a hex address
 (`0x...`) or a function/symbol name**.
 
 | Category | Tools | Count |
@@ -112,8 +112,11 @@ library concurrently completed in ~44 s wall.
 | Offsets | set_offset, clear_offset, get_offset, offset_candidates | 4 |
 | Index | index_search, index_search_kind, index_status | 3 |
 | dyld cache | dsc_status, dsc_images, dsc_locate, dsc_dependencies, dsc_regions | 5 |
+| Database internals | netnode_get, netnode_list, netnode_set, parser_status, select_parser, declare_type_for, undo_status, undo_point, undo, redo | 10 |
 
-The last seven categories reach IDA 9.4 subsystems that earlier releases did not expose. Two carry
+The last eight categories reach IDA 9.4 subsystems that earlier releases did not expose.
+`netnode_*` reads the key-value store the database is built on; writes to IDA's own
+`$ ...` nodes are refused, since a mistake there corrupts the database silently. Two carry
 runtime caveats: the indexer is **disabled by IDA under headless/batch mode**, so `index_*` reports
 unavailable there, and the `dsc_*` tools apply only when the database is an Apple dyld shared cache
 (`dsc_status` returns `is_shared_cache: false` otherwise).
