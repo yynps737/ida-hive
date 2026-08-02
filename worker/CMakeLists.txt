@@ -77,10 +77,23 @@ set_target_properties(ida_mcp_worker PROPERTIES
 
 # Multi-config generators append the configuration to the output directory, so the
 # path differs between MSVC and a single-config build. Packaging must not guess at
-# it: this file records where the binary actually landed, and release.yml reads it.
+# it: these files record where the binary actually landed, and the release workflow
+# reads them.
+#
+# OUTPUT must carry $<CONFIG> as well. Without it every configuration would write
+# the same file and the last one generated would win — on MSVC that is Debug, which
+# is not the configuration being built.
 file(GENERATE
-    OUTPUT "${CMAKE_BINARY_DIR}/worker-path.txt"
+    OUTPUT "${CMAKE_BINARY_DIR}/worker-path-$<CONFIG>.txt"
     CONTENT "$<TARGET_FILE:ida_mcp_worker>")
+
+# Single-config generators have exactly one configuration, so a stable name is safe
+# there and keeps the Linux packaging step simple.
+if(NOT CMAKE_CONFIGURATION_TYPES)
+    file(GENERATE
+        OUTPUT "${CMAKE_BINARY_DIR}/worker-path.txt"
+        CONTENT "$<TARGET_FILE:ida_mcp_worker>")
+endif()
 
 # Header-only, so no install step is needed.
 include(FetchContent)
