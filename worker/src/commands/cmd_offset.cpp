@@ -2,6 +2,7 @@
 
 #include <ida.hpp>
 #include <bytes.hpp>
+#include <ua.hpp>
 #include <xref.hpp>
 #include <offset.hpp>
 #include <nalt.hpp>
@@ -95,6 +96,41 @@ json cmd_clear_offset(const json &params)
     return { { "ea", ea_hex(ea) }, { "operand", n }, { "success", true } };
 }
 
+// The address an operand's reference resolves to.
+//
+// refinfo_t::target is documented as "BADADDR-none" and is unset for most
+// references: the target is not stored, it is computed from the operand value, the
+// base and the reference type. Reading the field directly therefore yields nothing
+// for the ordinary case, and falling back to `base` reports address 0 — which has a
+// name, so the answer looks plausible while being wrong.
+ea_t resolve_reference(ea_t ea, int n, const refinfo_t &ri)
+{
+    if (ri.target != BADADDR)
+        return ri.target;
+
+    // calc_target applies the reference type, base and tdelta to the operand value,
+    // which is what IDA itself does when it renders the operand. Which field holds
+    // that value depends on the operand: immediates carry it in `value`, memory and
+    // branch operands in `addr`. Reading the wrong one yields 0, and 0 is a valid
+    // address, so the mistake surfaces as the name of address 0 rather than a miss.
+    insn_t insn;
+    if (decode_insn(&insn, ea) > 0 && n >= 0 && n < UA_MAXOP)
+    {
+        const op_t &op = insn.ops[n];
+        const ea_t computed = calc_target(ea, op.type == o_imm ? op.value : op.addr, ri);
+        if (computed != BADADDR)
+            return computed;
+    }
+
+    // Last resort: the data xref IDA created for this reference.
+    xrefblk_t xb;
+    for (bool ok = xb.first_from(ea, XREF_DATA); ok; ok = xb.next_from())
+        if (!xb.iscode)
+            return xb.to;
+
+    return BADADDR;
+}
+
 // Reports whether an operand carries reference info, and what it resolves to.
 json cmd_get_offset(const json &params)
 {
@@ -105,9 +141,10 @@ json cmd_get_offset(const json &params)
     if (!get_refinfo(&ri, ea, n))
         return { { "ea", ea_hex(ea) }, { "operand", n }, { "is_offset", false } };
 
-    const ea_t target = ri.target != BADADDR ? ri.target : ri.base;
+    const ea_t target = resolve_reference(ea, n, ri);
     qstring nm;
-    get_name(&nm, target);
+    if (target != BADADDR)
+        get_name(&nm, target);
 
     return {
         { "ea",        ea_hex(ea) },
@@ -115,7 +152,7 @@ json cmd_get_offset(const json &params)
         { "is_offset", true },
         { "type",      reftype_to_name(ri.flags) },
         { "base",      ea_hex(ri.base) },
-        { "target",    ri.target == BADADDR ? json(nullptr) : json(ea_hex(ri.target)) },
+        { "target",    target == BADADDR ? json(nullptr) : json(ea_hex(target)) },
         { "name",      nm.empty() ? json(nullptr) : json(nm.c_str()) },
     };
 }
