@@ -643,6 +643,18 @@ pub struct SetFuncFlagReq {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct OperandReq {
+    #[schemars(description = "Address of the item whose operand is being read")]
+    pub ea: String,
+    #[serde(default)]
+    #[schemars(description = "Operand index, 0 by default")]
+    pub operand: Option<i64>,
+    #[serde(default)]
+    #[schemars(description = "Session identifier")]
+    pub session: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct OffsetReq {
     #[schemars(description = "Address of the item whose operand is being marked")]
     pub ea: String,
@@ -1461,14 +1473,14 @@ impl IdaMcpServer {
     }
 
     #[tool(description = "Remove an operand's reference marking, returning it to a plain number.")]
-    async fn clear_offset(&self, Parameters(OffsetReq { ea, operand, r#type: _, base: _, target: _, session }): Parameters<OffsetReq>) -> String {
+    async fn clear_offset(&self, Parameters(OperandReq { ea, operand, session }): Parameters<OperandReq>) -> String {
         let mut p = serde_json::json!({"ea": ea});
         if let Some(o) = operand { p["operand"] = o.into(); }
         route(&self.coordinator, session, "clear_offset", p).await
     }
 
     #[tool(description = "Report whether an operand carries reference info, and what address and name it resolves to.")]
-    async fn get_offset(&self, Parameters(OffsetReq { ea, operand, r#type: _, base: _, target: _, session }): Parameters<OffsetReq>) -> String {
+    async fn get_offset(&self, Parameters(OperandReq { ea, operand, session }): Parameters<OperandReq>) -> String {
         let mut p = serde_json::json!({"ea": ea});
         if let Some(o) = operand { p["operand"] = o.into(); }
         route(&self.coordinator, session, "get_offset", p).await
