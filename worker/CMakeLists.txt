@@ -51,6 +51,7 @@ ida_add_idalib(ida_mcp_worker
         src/commands/cmd_indexer.cpp
         src/commands/cmd_signatures.cpp
         src/commands/cmd_offset.cpp
+        src/commands/cmd_database.cpp
 )
 
 # Sources include their own headers as <ida_hive/...>, the same spelling a consumer

@@ -146,6 +146,7 @@ int main(int argc, char* argv[])
     register_indexer_commands(dispatcher);
     register_signature_commands(dispatcher);
     register_offset_commands(dispatcher);
+    register_database_commands(dispatcher);
 
     dispatcher.register_command("ping", [](const json& params) -> json {
         return {{"pong", true}};
