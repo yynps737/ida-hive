@@ -233,6 +233,27 @@ impl Coordinator {
         Ok(())
     }
 
+    /// Stops every worker and removes its database directory.
+    ///
+    /// A worker's directory is removed by `Slot::drop`, which a signal never reaches:
+    /// the default disposition for SIGTERM terminates the process without unwinding.
+    /// Since an MCP client stops its servers with a signal, every restart would
+    /// otherwise strand a database — gigabytes of it for a large binary, on a `/tmp`
+    /// that is a RAM disk on most systems.
+    pub async fn shutdown(&self) {
+        let slots = {
+            let mut guard = self.slots.write().await;
+            self.sessions.write().await.clear();
+            std::mem::take(&mut *guard)
+        };
+
+        for slot in &slots {
+            if let Err(e) = slot.stop().await {
+                warn!(slot = %slot.id, error = %e, "worker did not stop cleanly");
+            }
+        }
+    }
+
     /// Converts each binary to .i64 under a `concurrency` cap. Results come back in
     /// input order; a per-file failure is reported in its entry, not raised.
     pub async fn batch_convert(
