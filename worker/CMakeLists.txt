@@ -1,34 +1,29 @@
 cmake_minimum_required(VERSION 3.27)
-project(ida_mcp_worker VERSION 0.1.0)
-set(CMAKE_CXX_STANDARD 17)
 
 # Accept either a CMake cache entry or the environment variable for IDASDK.
 if(DEFINED IDASDK AND NOT DEFINED ENV{IDASDK})
     set(ENV{IDASDK} "${IDASDK}")
-elseif(NOT DEFINED IDASDK AND DEFINED ENV{IDASDK})
-    set(IDASDK "$ENV{IDASDK}")
 endif()
-
-if(NOT DEFINED IDASDK AND NOT DEFINED ENV{IDASDK})
+if(NOT DEFINED ENV{IDASDK})
     message(FATAL_ERROR "IDASDK must point to the IDA SDK root (repo root or src/).")
 endif()
 
-set(_ida_sdk_bootstrap_root "$ENV{IDASDK}")
-if(NOT _ida_sdk_bootstrap_root AND DEFINED IDASDK)
-    set(_ida_sdk_bootstrap_root "${IDASDK}")
+# Must precede project(): idasdk_init preselects MSVC so project() finds cl.exe.
+# It also accepts either SDK layout, <root>/include or <root>/src/include.
+set(_idasdk_init "$ENV{IDASDK}/src/cmake/idasdk_init.cmake")
+if(NOT EXISTS "${_idasdk_init}")
+    set(_idasdk_init "$ENV{IDASDK}/cmake/idasdk_init.cmake")
 endif()
-
-if(EXISTS "${_ida_sdk_bootstrap_root}/src/cmake/bootstrap.cmake")
-    include("${_ida_sdk_bootstrap_root}/src/cmake/bootstrap.cmake")
-elseif(EXISTS "${_ida_sdk_bootstrap_root}/cmake/bootstrap.cmake")
-    include("${_ida_sdk_bootstrap_root}/cmake/bootstrap.cmake")
-else()
-    message(FATAL_ERROR "Could not locate ida-cmake bootstrap under: ${_ida_sdk_bootstrap_root}")
+if(NOT EXISTS "${_idasdk_init}")
+    message(FATAL_ERROR
+        "Could not locate cmake/idasdk_init.cmake under $ENV{IDASDK}. "
+        "IDA SDK 9.4 or newer is required; 9.2/9.3 shipped bootstrap.cmake instead.")
 endif()
+include("${_idasdk_init}")
 
-# bootstrap normalizes the public SDK layout to .../src; the cache must follow or
-# a re-configure resolves against the pre-normalized tree.
-set(IDASDK "$ENV{IDASDK}" CACHE PATH "Path to the IDA SDK root" FORCE)
+project(ida_mcp_worker VERSION 0.1.0)
+set(CMAKE_CXX_STANDARD 17)
+
 find_package(idasdk REQUIRED)
 
 ida_add_idalib(ida_mcp_worker
@@ -45,6 +40,11 @@ ida_add_idalib(ida_mcp_worker
         commands/cmd_stack.cpp
         commands/cmd_composite.cpp
 )
+
+# ida_add_idalib points RUNTIME_OUTPUT_DIRECTORY at IDABIN, which would write the
+# worker into the IDA installation. Keep it in the build tree instead.
+set_target_properties(ida_mcp_worker PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 
 # Header-only, so no install step is needed.
 include(FetchContent)

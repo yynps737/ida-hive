@@ -14,7 +14,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-SDK_TAG="v9.2.0-sdk.1"
+SDK_TAG="v9.4.0-release"
 SDK_CACHE="${SDK_CACHE:-$ROOT/worker/.ida-sdk-cache}"
 BUILD_DIR="${BUILD_DIR:-$ROOT/worker/build-linux}"
 
@@ -31,15 +31,14 @@ else
 fi
 
 if [ "${SKIP_WORKER:-0}" != "1" ]; then
-    step "2/4  C++ worker build against the real IDA 9.2 SDK"
+    step "2/4  C++ worker build against the real IDA 9.4 SDK"
 
     if [ -z "${IDASDK:-}" ]; then
         if [ ! -f "$SDK_CACHE/src/include/ida.hpp" ]; then
-            echo "  cloning public IDA SDK $SDK_TAG (headers + ida-cmake submodule)..."
+            echo "  cloning public IDA SDK $SDK_TAG..."
             rm -rf "$SDK_CACHE"
             if git clone --branch "$SDK_TAG" --depth 1 \
-                 https://github.com/HexRaysSA/ida-sdk.git "$SDK_CACHE" >/tmp/ida_hive_sdk.log 2>&1 \
-               && git -C "$SDK_CACHE" submodule update --init src/cmake >>/tmp/ida_hive_sdk.log 2>&1; then
+                 https://github.com/HexRaysSA/ida-sdk.git "$SDK_CACHE" >/tmp/ida_hive_sdk.log 2>&1; then
                 echo "  SDK ready at $SDK_CACHE"
             else
                 bad "SDK clone failed — see /tmp/ida_hive_sdk.log"; tail -15 /tmp/ida_hive_sdk.log
@@ -48,9 +47,10 @@ if [ "${SKIP_WORKER:-0}" != "1" ]; then
         export IDASDK="$SDK_CACHE/src"
     fi
     # The SDK ships Linux link stubs here; no IDA install needed just to link.
-    export IDABIN="${IDABIN:-$IDASDK/lib/x64_linux_gcc_64}"
+    export IDABIN="${IDABIN:-$IDASDK/lib/x64_linux_64}"
 
-    if [ -f "$IDASDK/cmake/bootstrap.cmake" ]; then
+    # IDASDK may name the repo root or its src/ subdirectory; both are valid.
+    if [ -f "$IDASDK/cmake/idasdk_init.cmake" ] || [ -f "$IDASDK/src/cmake/idasdk_init.cmake" ]; then
         if cmake -S worker -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release >/tmp/ida_hive_cmake.log 2>&1 \
            && cmake --build "$BUILD_DIR" -j"$(nproc)" >>/tmp/ida_hive_cmake.log 2>&1; then
             ok "worker compiled + linked via worker/CMakeLists.txt"
@@ -58,22 +58,28 @@ if [ "${SKIP_WORKER:-0}" != "1" ]; then
             bad "worker build failed — see /tmp/ida_hive_cmake.log"; tail -25 /tmp/ida_hive_cmake.log
         fi
     else
-        bad "IDASDK=$IDASDK has no cmake/bootstrap.cmake (submodule not initialized?)"
+        bad "IDASDK=$IDASDK has no cmake/idasdk_init.cmake (SDK older than 9.4?)"
     fi
 
-    step "3/4  Worker runs up to the license gate (clean init_error)"
+    step "3/4  Worker starts against a real IDA install"
     WORKER="$(find "$BUILD_DIR" -name ida_mcp_worker -type f 2>/dev/null | head -1)"
-    if [ -n "$WORKER" ]; then
-        OUT="$(echo '{"id":1,"method":"ping","params":{}}' \
-               | LD_LIBRARY_PATH="$IDABIN" timeout 30 "$WORKER" /bin/ls /tmp 2>/dev/null | head -1)"
-        if echo "$OUT" | grep -q 'init_library'; then
-            ok "worker reached init_library and reported the license gate cleanly"
-            echo "       $OUT"
-        else
-            bad "unexpected worker startup output: $OUT"
-        fi
-    else
+    if [ -z "$WORKER" ]; then
         bad "no ida_mcp_worker binary produced"
+    # The SDK's lib/ holds link-time stubs only: they satisfy the linker but
+    # segfault when called, so this step needs a real install to mean anything.
+    elif [ ! -x "$IDABIN/idat" ] && [ ! -x "$IDABIN/ida" ]; then
+        echo "  SKIPPED: IDABIN=$IDABIN holds link stubs, not a runnable IDA."
+        echo "           Set IDABIN to an IDA installation to cover this step."
+    else
+        # stdout carries the protocol; the [worker] log lines go to stderr.
+        OUT="$(echo '{"id":1,"method":"ping","params":{}}' \
+               | LD_LIBRARY_PATH="$IDABIN" timeout 60 "$WORKER" /bin/ls /tmp 2>/dev/null | head -1)"
+        if echo "$OUT" | grep -qE '"event":"(ready|init_error)"'; then
+            ok "worker started and reported its state cleanly"
+            echo "       $(echo "$OUT" | cut -c1-100)"
+        else
+            bad "unexpected worker startup output: ${OUT:-<empty>}"
+        fi
     fi
 else
     step "2-3/4  C++ worker  (SKIPPED: SKIP_WORKER=1)"

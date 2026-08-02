@@ -15,7 +15,7 @@ permissions:
   contents: write
 
 env:
-  IDA_SDK_TAG: v9.2.0-sdk.1
+  IDA_SDK_TAG: v9.4.0-release
   RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
 
 jobs:
@@ -40,7 +40,6 @@ jobs:
       - name: Clone IDA SDK
         run: |
           git clone --branch "${IDA_SDK_TAG}" --depth 1 https://github.com/HexRaysSA/ida-sdk.git "${RUNNER_TEMP}/ida-sdk"
-          git -C "${RUNNER_TEMP}/ida-sdk" submodule update --init --recursive
 
       - name: Build Linux worker
         run: |
@@ -98,7 +97,6 @@ jobs:
         shell: pwsh
         run: |
           git clone --branch "$env:IDA_SDK_TAG" --depth 1 https://github.com/HexRaysSA/ida-sdk.git "$env:RUNNER_TEMP\\ida-sdk"
-          git -C "$env:RUNNER_TEMP\\ida-sdk" submodule update --init --recursive
 
       - name: Build Windows worker
         shell: pwsh
