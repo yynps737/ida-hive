@@ -355,21 +355,23 @@ def test_server_health_and_empty_state():
         check(c.call("list_instances") == [], "list_instances should be empty")
 
 
-@xfail("server_health hardcodes max_slots=100 (tools.rs:1001) instead of reading "
-       "config.max_slots; open_file enforces the real limit, so the reported "
-       "number misleads capacity planning.")
+@test
 def test_server_health_reports_configured_max_slots():
-    """KNOWN BUG: server_health.max_slots ignores IDA_MCP_MAX_SLOTS.
+    """server_health.max_slots reflects IDA_MCP_MAX_SLOTS (fixed: was hardcoded 100).
 
-    Asserts the buggy behavior (reports 100 regardless) so the suite stays green
-    while documenting it. When the bug is fixed this test fails and must be
-    updated to assert the configured value.
+    Regression guard for bug V1: server_health used to emit a constant 100
+    regardless of configuration, misleading capacity planning. It must now
+    report the same limit open_file enforces.
     """
     with McpClient(IDA_MCP_MAX_SLOTS=7) as c:
         health = c.call("server_health")
+        check(health["max_slots"] == 7,
+              f"server_health should report the configured cap 7, got {health['max_slots']}")
+    # And the default when unset stays 100.
+    with McpClient() as c:
+        health = c.call("server_health")
         check(health["max_slots"] == 100,
-              f"KNOWN BUG no longer reproduces (got max_slots={health['max_slots']}); "
-              f"server_health now seems to respect config — update this test to assert 7")
+              f"default max_slots should be 100, got {health['max_slots']}")
 
 
 # ---------------------------------------------------------------------------

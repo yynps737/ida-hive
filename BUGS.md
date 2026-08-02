@@ -163,13 +163,14 @@ Found without an activated IDA license, via `tests/build_check.sh`
 and the `tests/test_coordinator.py` end-to-end suite. These are separate from the
 tool-surface bugs above.
 
-- **V1 — [CONFIRMED] `server_health` reports `max_slots: 100` unconditionally**
-  (`src/tools.rs`, the `server_health` handler). It ignores `IDA_MCP_MAX_SLOTS`
-  and `config.max_slots`. The real cap is enforced correctly by `open()`
-  (`Max slots (N) reached`), so only the *reported* number is wrong — but it
-  misleads capacity planning by an MCP client. **Fix:** thread `config.max_slots`
-  through to `server_health`. Tracked by the `xfail` test
-  `test_server_health_reports_configured_max_slots`.
+- **V1 — [FIXED] `server_health` reported `max_slots: 100` unconditionally**
+  (`src/tools.rs`, the `server_health` handler). It ignored `IDA_MCP_MAX_SLOTS`
+  and `config.max_slots`. The real cap was enforced correctly by `open()`
+  (`Max slots (N) reached`), so only the *reported* number was wrong — but it
+  misled capacity planning by an MCP client. **Fixed:** added
+  `Coordinator::max_slots()` and `server_health` now reports it. Regression
+  guard: `test_server_health_reports_configured_max_slots` (asserts the
+  configured cap and the default).
 
 - **V2 — [CONFIRMED] `enum_upsert` silently ignores its `bitfield` parameter**
   (`worker/commands/cmd_types.cpp`). The value is read (`params.value("bitfield",

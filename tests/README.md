@@ -62,16 +62,20 @@ them separately from real failures.
 
 See `../BUGS.md`. In brief, the license-free validation surfaced:
 
-- **`server_health` reports `max_slots: 100` unconditionally** (`src/tools.rs`),
-  ignoring `IDA_MCP_MAX_SLOTS` / `config.max_slots`. The real cap is enforced
-  correctly by `open_file`; only the reported number is wrong. Tracked by the
-  `xfail` test `test_server_health_reports_configured_max_slots`.
-- **`enum_upsert` silently ignores its `bitfield` parameter**
-  (`worker/commands/cmd_types.cpp`): the value is read, documented in the
-  comment, then never applied — the enum is always built as a plain C enum.
-- **`init_error` for the license gate carries a garbage `code`**
-  (`worker/worker.cpp` passes `init_library()`'s return through, which is
-  uninitialized on this path) — the `message` is correct, the `code` is noise.
+- **[FIXED] `server_health` reported `max_slots: 100` unconditionally**
+  (`src/tools.rs`), ignoring `IDA_MCP_MAX_SLOTS` / `config.max_slots`. Now reports
+  `Coordinator::max_slots()`; guarded by
+  `test_server_health_reports_configured_max_slots`.
+- **[dead code, not reachable via MCP] `enum_upsert`'s `bitfield` parameter**
+  (`worker/commands/cmd_types.cpp`): read, documented in a comment, never
+  applied. The Rust `enum_upsert` tool does not expose `bitfield`, so through the
+  MCP surface it is always `false` and a plain C enum is always correct. Wiring
+  it up is a feature addition that cannot be validated without a license, so it
+  was left as-is rather than changed blind.
+- **[idalib pass-through, not our bug] license-gate `init_error` `code`**
+  (`worker/worker.cpp`): the worker faithfully reports `init_library()`'s return
+  value, which is non-deterministic on the failure path. The `message` is
+  correct; masking the `code` would hide idalib's real return, so it was left.
 
 The C++ worker is otherwise clean under `-Wall -Wextra` (8 benign warnings) and
 `clang-tidy` bugprone/analyzer checks (no real defects; the two empty `catch`

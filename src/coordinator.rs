@@ -57,6 +57,13 @@ impl Coordinator {
         }
     }
 
+    /// The configured maximum number of concurrent worker slots. This is the
+    /// same limit `open()` enforces, so `server_health` reports the real cap
+    /// instead of a hardcoded constant.
+    pub fn max_slots(&self) -> usize {
+        self.config.max_slots
+    }
+
     /// Get (or create) the per-path lock for a canonical path, pruning entries
     /// no longer referenced by any in-flight open so the map stays bounded.
     async fn lock_for_path(&self, path: &str) -> Arc<Mutex<()>> {

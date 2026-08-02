@@ -998,7 +998,7 @@ impl IdaMcpServer {
             "status": "ok",
             "total_slots": slots.len(),
             "alive_slots": alive,
-            "max_slots": 100,
+            "max_slots": self.coordinator.max_slots(),
         }).to_string()
     }
 }
