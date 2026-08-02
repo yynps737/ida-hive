@@ -25,6 +25,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -286,6 +287,87 @@ def test_slot_cap_with_real_workers(server, worker, ida, binaries, failures):
         c.close()
 
 
+
+def test_batch_convert_real(server, worker, ida, binaries, failures, tmpdir):
+    """batch_convert against real IDA: every input accounted for, files on disk."""
+    c = Client(server, worker, ida, IDA_MCP_MAX_SLOTS=8)
+    try:
+        started = time.time()
+        result = c.call("batch_convert", timeout=OPEN_TIMEOUT * 2,
+                        paths=[str(b) for b in binaries],
+                        output_dir=str(tmpdir), concurrency=3, max_analysis_seconds=120)
+        if err(result):
+            check(False, f"batch_convert failed outright: {result}", failures)
+            return
+
+        elapsed = time.time() - started
+        results = result.get("results", [])
+        check(len(results) == len(binaries),
+              f"batch returned {len(results)} results for {len(binaries)} inputs", failures)
+
+        # Order is part of the contract: results line up with the inputs given.
+        for i, (b, r) in enumerate(zip(binaries, results)):
+            check(r.get("source") == str(b),
+                  f"result {i} is for {r.get('source')}, expected {b}", failures)
+
+        done = [r for r in results if r.get("error") is None]
+        check(result.get("completed") == len(done),
+              f"completed={result.get('completed')} but {len(done)} entries lack an error",
+              failures)
+
+        # A converted file must actually exist and be a real database.
+        for r in done:
+            out = r.get("i64_path")
+            if not check(out and Path(out).is_file(), f"missing output for {r.get('source')}", failures):
+                continue
+            check(Path(out).stat().st_size > 1024,
+                  f"suspiciously small database: {out}", failures)
+
+        print(f"    converted {len(done)}/{len(binaries)} in {elapsed:.0f}s, "
+              f"{result.get('total_functions', 0)} functions total")
+
+        # Sessions are internal to the batch and must not survive it.
+        check(not worker_pids(c.proc.pid),
+              f"batch left workers running: {worker_pids(c.proc.pid)}", failures)
+        instances = c.call("list_instances")
+        inst = instances if isinstance(instances, list) else instances.get("instances", [])
+        check(not inst, f"batch left slots allocated: {inst}", failures)
+        print("    batch cleaned up its own sessions")
+    finally:
+        c.close()
+
+
+def test_batch_concurrency_exceeds_slots(server, worker, ida, binaries, failures, tmpdir):
+    """batch concurrency and max_slots are separate limits; the tighter one wins.
+
+    Asking for more parallelism than the pool allows must degrade to partial
+    conversion with per-file errors, never to a hang or a bogus success count.
+    """
+    c = Client(server, worker, ida, IDA_MCP_MAX_SLOTS=1)
+    try:
+        result = c.call("batch_convert", timeout=OPEN_TIMEOUT * 2,
+                        paths=[str(b) for b in binaries],
+                        output_dir=str(tmpdir), concurrency=4, max_analysis_seconds=120)
+        if err(result):
+            check(False, f"batch_convert errored instead of degrading: {result}", failures)
+            return
+
+        results = result.get("results", [])
+        check(len(results) == len(binaries),
+              f"every input needs an entry even when slots run out: got {len(results)}",
+              failures)
+        failed = [r for r in results if r.get("error")]
+        completed = result.get("completed", 0)
+        check(completed + len(failed) == len(binaries),
+              f"completed({completed}) + failed({len(failed)}) != {len(binaries)}", failures)
+        print(f"    max_slots=1 vs concurrency=4: {completed} converted, "
+              f"{len(failed)} reported an error, none lost")
+        check(not worker_pids(c.proc.pid),
+              f"workers survived a contended batch: {worker_pids(c.proc.pid)}", failures)
+    finally:
+        c.close()
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--server", default=str(ROOT / "target" / "release" / "ida-hive"))
@@ -316,6 +398,13 @@ def main():
     test_shared_binary_one_process(args.server, args.worker, args.ida, binaries[0], failures)
     print("  slot cap with real workers")
     test_slot_cap_with_real_workers(args.server, args.worker, args.ida, binaries, failures)
+
+    with tempfile.TemporaryDirectory(prefix="ida-hive-batch-") as td:
+        print("  batch_convert with real IDA")
+        test_batch_convert_real(args.server, args.worker, args.ida, binaries[:3], failures, Path(td))
+        print("  batch concurrency exceeding max_slots")
+        test_batch_concurrency_exceeds_slots(args.server, args.worker, args.ida,
+                                             binaries[:3], failures, Path(td))
 
     elapsed = time.time() - started
     print()
