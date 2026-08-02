@@ -35,15 +35,22 @@ pub struct Coordinator {
     /// worker while opens of different binaries stay parallel. A global lock would
     /// stall the whole pool behind one large binary's analysis.
     path_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    /// One permit per slot, taken before a worker is spawned and released when it is
+    /// dropped. Counting `slots` instead would leave a window between the check and
+    /// the push — start() is slow, so concurrent opens of *different* paths would all
+    /// see room and overshoot max_slots together.
+    capacity: Arc<Semaphore>,
 }
 
 impl Coordinator {
     pub fn new(config: CoordinatorConfig) -> Self {
+        let capacity = Arc::new(Semaphore::new(config.max_slots));
         Self {
             config,
             sessions: RwLock::new(HashMap::new()),
             slots: RwLock::new(Vec::new()),
             path_locks: Mutex::new(HashMap::new()),
+            capacity,
         }
     }
 
@@ -123,20 +130,23 @@ impl Coordinator {
             }
         }
 
-        {
-            let slots = self.slots.read().await;
-            if slots.len() >= self.config.max_slots {
+        // Taken before the spawn and moved into the slot, so the seat is held for the
+        // worker's whole life and returned by Slot::drop.
+        let permit = match Arc::clone(&self.capacity).try_acquire_owned() {
+            Ok(p) => p,
+            Err(_) => {
                 return Err(anyhow!(
                     "Max slots ({}) reached. Close a session first.",
                     self.config.max_slots
-                ));
+                ))
             }
-        }
+        };
 
         let slot_id = uuid::Uuid::new_v4().to_string();
         let slot = Arc::new(Slot::new(slot_id.clone(), path.to_string()));
 
         slot.start(&self.config.worker_exe, self.config.open_timeout).await?;
+        slot.hold_permit(permit).await;
 
         self.slots.write().await.push(Arc::clone(&slot));
         self.sessions.write().await.insert(session_id.to_string(), Arc::clone(&slot));

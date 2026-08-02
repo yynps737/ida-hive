@@ -7,7 +7,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, Result};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{mpsc, oneshot, Mutex, OwnedSemaphorePermit};
 use tokio::time::{timeout, Duration};
 use tracing::{info, warn};
 
@@ -29,6 +29,9 @@ pub struct Slot {
     stdin_tx: Mutex<Option<mpsc::Sender<String>>>,
     pub ready_data: Mutex<Option<serde_json::Value>>,
     dead: Arc<AtomicBool>,
+    /// The coordinator's capacity seat. Held for the worker's whole life and
+    /// released on drop, which is what keeps the pool from overshooting max_slots.
+    permit: Mutex<Option<OwnedSemaphorePermit>>,
 }
 
 impl Slot {
@@ -44,7 +47,13 @@ impl Slot {
             stdin_tx: Mutex::new(None),
             ready_data: Mutex::new(None),
             dead: Arc::new(AtomicBool::new(false)),
+            permit: Mutex::new(None),
         }
+    }
+
+    /// Takes ownership of the capacity seat reserved for this worker.
+    pub async fn hold_permit(&self, permit: OwnedSemaphorePermit) {
+        *self.permit.lock().await = Some(permit);
     }
 
     /// Spawns the worker and waits up to `ready_timeout` for its ready event.
