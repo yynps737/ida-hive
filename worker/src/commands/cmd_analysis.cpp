@@ -33,13 +33,10 @@ json cmd_decompile(const json &params)
     if (!s_hexrays_available)
         throw std::runtime_error("Hex-Rays decompiler not available");
 
-    ea_t ea = parse_ea(params.at("ea"));
-    func_t* f = get_func(ea);
-    if (!f)
-        throw std::runtime_error("No function at given address");
+    func_t &f = require_func(params);
 
     hexrays_failure_t hf;
-    cfuncptr_t cfunc = decompile(f, &hf);
+    cfuncptr_t cfunc = decompile(&f, &hf);
     if (!cfunc)
         throw std::runtime_error(std::string("Decompilation failed: ") + hf.desc().c_str());
 
@@ -54,10 +51,10 @@ json cmd_decompile(const json &params)
     }
 
     qstring func_name;
-    get_func_name(&func_name, f->start_ea);
+    get_func_name(&func_name, f.start_ea);
 
     return {
-        {"ea",         ea_hex(f->start_ea)},
+        {"ea",         ea_hex(f.start_ea)},
         {"name",       func_name.c_str()},
         {"pseudocode", pseudocode},
     };
@@ -65,7 +62,7 @@ json cmd_decompile(const json &params)
 
 json cmd_disasm(const json &params)
 {
-    ea_t ea = parse_ea(params.at("ea"));
+    ea_t ea = require_ea(params);
     size_t count = params.value("count", 50);
 
     func_t* f = get_func(ea);
@@ -104,7 +101,7 @@ json cmd_disasm(const json &params)
 
 json cmd_xrefs_to(const json &params)
 {
-    ea_t ea = parse_ea(params.at("ea"));
+    ea_t ea = require_ea(params);
 
     json refs = json::array();
     xrefblk_t xb;
@@ -127,7 +124,7 @@ json cmd_xrefs_to(const json &params)
 
 json cmd_xrefs_from(const json &params)
 {
-    ea_t ea = parse_ea(params.at("ea"));
+    ea_t ea = require_ea(params);
 
     json refs = json::array();
     xrefblk_t xb;
@@ -150,7 +147,7 @@ json cmd_xrefs_from(const json &params)
 
 json cmd_callees(const json &params)
 {
-    ea_t ea = parse_ea(params.at("ea"));
+    ea_t ea = require_ea(params);
     func_t &f = require_func(params);
 
     json callees = json::array();
@@ -165,10 +162,10 @@ json cmd_callees(const json &params)
 
 json cmd_xref_query(const json &params)
 {
-    ea_t ea = parse_ea(params.at("ea"));
+    ea_t ea = require_ea(params);
     std::string direction = params.value("direction", std::string("both"));
     bool code_only = params.value("code_only", false);
-    size_t limit = params.value("limit", 100);
+    size_t limit = opt_limit(params, 100);
 
     json refs = json::array();
 
@@ -214,9 +211,9 @@ json cmd_xref_query(const json &params)
 
 json cmd_xrefs_to_field(const json &params)
 {
-    ea_t ea = parse_ea(params.at("ea"));
+    ea_t ea = require_ea(params);
     int field_offset = params.at("field_offset").get<int>();
-    size_t limit = params.value("limit", 50);
+    size_t limit = opt_limit(params, 50);
 
     func_t* f = get_func(ea);
     if (!f) throw std::runtime_error("No function at address");
@@ -305,7 +302,7 @@ json cmd_analyze_batch(const json &params)
 
 json cmd_export_funcs(const json &params)
 {
-    size_t limit = params.value("limit", 100);
+    size_t limit = opt_limit(params, 100);
 
     json funcs = json::array();
 

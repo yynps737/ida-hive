@@ -9,6 +9,7 @@
 
 #include "ida_hive/commands.hpp"
 #include "ida_hive/util.hpp"
+#include "ida_hive/params.hpp"
 
 namespace ida_hive {
 namespace {
@@ -17,18 +18,9 @@ namespace {
 
 json cmd_stack_frame(const json &params)
 {
-    ea_t ea = parse_ea(params.at("ea"));
-    func_t* f = get_func(ea);
-    if (!f)
-        throw std::runtime_error("No function at address");
+    func_t &f = require_func(params);
 
-    if (!init_hexrays_plugin())
-        throw std::runtime_error("Hex-Rays required for stack frame analysis");
-
-    hexrays_failure_t hf;
-    cfuncptr_t cfunc = decompile(f, &hf);
-    if (!cfunc)
-        throw std::runtime_error("Decompilation failed");
+    cfuncptr_t cfunc = require_decompiled(f);
 
     json vars = json::array();
     lvars_t* lvars = cfunc->get_lvars();
@@ -51,30 +43,24 @@ json cmd_stack_frame(const json &params)
     }
 
     qstring func_name;
-    get_func_name(&func_name, f->start_ea);
+    get_func_name(&func_name, f.start_ea);
 
     return {
-        {"ea",         ea_hex(f->start_ea)},
+        {"ea",         ea_hex(f.start_ea)},
         {"name",       func_name.c_str()},
-        {"frame_size", (size_t)f->frsize},
+        {"frame_size", (size_t)f.frsize},
         {"variables",  vars},
     };
 }
 
 json cmd_declare_stack(const json &params)
 {
-    ea_t ea = parse_ea(params.at("ea"));
     std::string old_name = params.at("old_name").get<std::string>();
     std::string new_name = params.value("new_name", std::string{});
     std::string type_str = params.value("type", std::string{});
 
-    func_t* f = get_func(ea);
-    if (!f) throw std::runtime_error("No function at address");
-    if (!init_hexrays_plugin()) throw std::runtime_error("Hex-Rays required");
-
-    hexrays_failure_t hf;
-    cfuncptr_t cfunc = decompile(f, &hf);
-    if (!cfunc) throw std::runtime_error("Decompilation failed");
+    func_t &f = require_func(params);
+    cfuncptr_t cfunc = require_decompiled(f);
 
     lvars_t* lvars = cfunc->get_lvars();
     if (!lvars) throw std::runtime_error("No local variables");
@@ -120,7 +106,7 @@ json cmd_declare_stack(const json &params)
     // Skipped when a requested retype failed to parse, keeping the pair atomic.
     if (want_rename && (!want_retype || type_ok))
     {
-        renamed = rename_lvar(f->start_ea, old_name.c_str(), new_name.c_str());
+        renamed = rename_lvar(f.start_ea, old_name.c_str(), new_name.c_str());
         if (!renamed && error.empty())
             error = "rename_lvar failed";
     }
@@ -134,7 +120,7 @@ json cmd_declare_stack(const json &params)
         // locate_lvar() yields the locator the persistence layer matches on.
         // A raw lvar_t::location/defea does not match and the retype is dropped.
         lvar_saved_info_t lsi;
-        if (!locate_lvar(&lsi.ll, f->start_ea, cur_name))
+        if (!locate_lvar(&lsi.ll, f.start_ea, cur_name))
         {
             if (error.empty())
                 error = "locate_lvar failed";
@@ -146,7 +132,7 @@ json cmd_declare_stack(const json &params)
             lsi.size = tif.get_size();
             // Name and type go together, or the stored entry drifts from the lvar.
             retyped = modify_user_lvar_info(
-                f->start_ea, MLI_NAME | MLI_TYPE, lsi);
+                f.start_ea, MLI_NAME | MLI_TYPE, lsi);
             if (!retyped && error.empty())
                 error = "modify_user_lvar_info failed";
         }
@@ -156,7 +142,7 @@ json cmd_declare_stack(const json &params)
     bool success = (!want_rename || renamed) && (!want_retype || retyped);
 
     json result = {
-        {"ea", ea_hex(f->start_ea)},
+        {"ea", ea_hex(f.start_ea)},
         {"old_name", old_name},
         {"renamed", renamed},
         {"retyped", retyped},
@@ -169,17 +155,16 @@ json cmd_declare_stack(const json &params)
 
 json cmd_delete_stack(const json &params)
 {
-    ea_t ea = parse_ea(params.at("ea"));
     std::string vname = params.at("name").get<std::string>();
 
-    func_t* f = get_func(ea);
-    if (!f) throw std::runtime_error("No function at address");
-    if (!init_hexrays_plugin()) throw std::runtime_error("Hex-Rays required");
+    func_t &f = require_func(params);
+    if (!init_hexrays_plugin())
+        throw std::runtime_error("Hex-Rays decompiler is not available");
 
     // An empty name restores IDA's generated default.
-    bool ok = rename_lvar(f->start_ea, vname.c_str(), "");
+    bool ok = rename_lvar(f.start_ea, vname.c_str(), "");
 
-    return {{"ea", ea_hex(f->start_ea)}, {"name", vname}, {"reset", ok}};
+    return {{"ea", ea_hex(f.start_ea)}, {"name", vname}, {"reset", ok}};
 }
 
 const command_entry_t kCommands[] = {

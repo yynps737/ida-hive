@@ -9,13 +9,14 @@
 
 #include "ida_hive/commands.hpp"
 #include "ida_hive/util.hpp"
+#include "ida_hive/params.hpp"
 
 namespace ida_hive {
 namespace {
 
 json cmd_rename(const json &params)
 {
-    ea_t ea = parse_ea(params.at("ea"));
+    ea_t ea = require_ea(params);
     std::string new_name = params.at("name").get<std::string>();
 
     bool ok = set_name(ea, new_name.c_str(), SN_CHECK);
@@ -27,7 +28,7 @@ json cmd_rename(const json &params)
 
 json cmd_set_comment(const json &params)
 {
-    ea_t ea = parse_ea(params.at("ea"));
+    ea_t ea = require_ea(params);
     std::string comment = params.at("comment").get<std::string>();
     bool repeatable = params.value("repeatable", false);
 
@@ -40,7 +41,7 @@ json cmd_set_comment(const json &params)
 
 json cmd_get_name(const json &params)
 {
-    ea_t ea = parse_ea(params.at("ea"));
+    ea_t ea = require_ea(params);
 
     qstring name;
     get_ea_name(&name, ea);
@@ -50,7 +51,7 @@ json cmd_get_name(const json &params)
 
 json cmd_append_comments(const json &params)
 {
-    ea_t ea = parse_ea(params.at("ea"));
+    ea_t ea = require_ea(params);
     std::string text = params.at("comment").get<std::string>();
     bool repeatable = params.value("repeatable", false);
 
@@ -68,7 +69,7 @@ json cmd_append_comments(const json &params)
 
 json cmd_define_func(const json &params)
 {
-    ea_t ea = parse_ea(params.at("ea"));
+    ea_t ea = require_ea(params);
     ea_t end = params.contains("end") ? parse_ea(params["end"]) : BADADDR;
 
     func_t* existing = get_func(ea);
@@ -101,7 +102,7 @@ json cmd_define_func(const json &params)
 
 json cmd_define_code(const json &params)
 {
-    ea_t ea = parse_ea(params.at("ea"));
+    ea_t ea = require_ea(params);
 
     insn_t insn;
     int len = create_insn(ea, &insn);
@@ -113,7 +114,7 @@ json cmd_define_code(const json &params)
 
 json cmd_undefine(const json &params)
 {
-    ea_t ea = parse_ea(params.at("ea"));
+    ea_t ea = require_ea(params);
     asize_t size = params.value("size", 1);
     if (size == 0)
         size = get_item_size(ea);

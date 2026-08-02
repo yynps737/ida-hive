@@ -28,20 +28,17 @@ namespace {
 
 json cmd_analyze_function(const json &params)
 {
-    ea_t ea = parse_ea(params.at("ea"));
-    func_t* f = get_func(ea);
-    if (!f)
-        throw std::runtime_error("No function at address");
+    func_t &f = require_func(params);
 
     qstring func_name;
-    get_func_name(&func_name, f->start_ea);
-    size_t fsize = (size_t)(f->end_ea - f->start_ea);
+    get_func_name(&func_name, f.start_ea);
+    size_t fsize = (size_t)(f.end_ea - f.start_ea);
 
     std::string pseudocode;
     if (init_hexrays_plugin())
     {
         hexrays_failure_t hf;
-        cfuncptr_t cfunc = decompile(f, &hf);
+        cfuncptr_t cfunc = decompile(&f, &hf);
         if (cfunc)
         {
             const strvec_t& sv = cfunc->get_pseudocode();
@@ -57,7 +54,7 @@ json cmd_analyze_function(const json &params)
 
     json callers = json::array();
     xrefblk_t xb;
-    for (bool ok = xb.first_to(f->start_ea, XREF_ALL); ok && callers.size() < 20; ok = xb.next_to())
+    for (bool ok = xb.first_to(f.start_ea, XREF_ALL); ok && callers.size() < 20; ok = xb.next_to())
     {
         if (!xb.iscode) continue;
         func_t* caller = get_func(xb.from);
@@ -71,17 +68,17 @@ json cmd_analyze_function(const json &params)
     json strings = json::array();
     std::set<ea_t> seen;
 
-    for (const call_edge_t &e : collect_callees(f->start_ea, f->end_ea))
+    for (const call_edge_t &e : collect_callees(f.start_ea, f.end_ea))
         callees.push_back({{"ea", ea_hex(e.callee_ea)}, {"name", func_name_of(e.callee_ea)}});
 
-    for (const string_ref_t &s : collect_string_refs(f->start_ea, f->end_ea, 20))
+    for (const string_ref_t &s : collect_string_refs(f.start_ea, f.end_ea, 20))
         strings.push_back({{"ea", ea_hex(s.ea)}, {"string", s.text}});
 
     qflow_chart_t fc;
-    fc.create("", f, BADADDR, BADADDR, FC_NOEXT);
+    fc.create("", &f, BADADDR, BADADDR, FC_NOEXT);
 
     return {
-        {"ea",          ea_hex(f->start_ea)},
+        {"ea",          ea_hex(f.start_ea)},
         {"name",        func_name.c_str()},
         {"size",        fsize},
         {"pseudocode",  pseudocode},
@@ -179,7 +176,7 @@ json cmd_survey_binary(const json &params)
 
 json cmd_trace_data_flow(const json &params)
 {
-    ea_t ea = parse_ea(params.at("ea"));
+    ea_t ea = require_ea(params);
     std::string direction = params.value("direction", std::string("forward"));
     int max_depth = params.value("depth", 5);
     bool forward = (direction != "backward");
@@ -300,7 +297,7 @@ json cmd_analyze_component(const json &params)
 
 json cmd_diff_before_after(const json &params)
 {
-    ea_t ea = parse_ea(params.at("ea"));
+    ea_t ea = require_ea(params);
     std::string action = params.at("action").get<std::string>();
     std::string value = params.at("value").get<std::string>();
 

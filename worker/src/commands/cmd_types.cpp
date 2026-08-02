@@ -10,13 +10,14 @@
 
 #include "ida_hive/commands.hpp"
 #include "ida_hive/util.hpp"
+#include "ida_hive/params.hpp"
 
 namespace ida_hive {
 namespace {
 
 json cmd_set_type(const json &params)
 {
-    ea_t ea = parse_ea(params.at("ea"));
+    ea_t ea = require_ea(params);
     std::string type_str = params.at("type").get<std::string>();
 
     // apply_cdecl needs the trailing ';' that the documented examples omit.
@@ -101,7 +102,7 @@ json cmd_declare_type(const json &params)
 json cmd_type_query(const json &params)
 {
     std::string filter = params.value("filter", std::string{});
-    size_t limit = params.value("limit", 50);
+    size_t limit = opt_limit(params, 50);
 
     json types = json::array();
     til_t* ti = get_idati();
@@ -137,7 +138,7 @@ json cmd_type_query(const json &params)
 json cmd_search_structs(const json &params)
 {
     std::string filter = params.value("filter", std::string{});
-    size_t limit = params.value("limit", 50);
+    size_t limit = opt_limit(params, 50);
 
     json structs = json::array();
     til_t* ti = get_idati();
@@ -172,18 +173,9 @@ json cmd_search_structs(const json &params)
 
 json cmd_infer_types(const json &params)
 {
-    ea_t ea = parse_ea(params.at("ea"));
-    func_t* f = get_func(ea);
-    if (!f)
-        throw std::runtime_error("No function at address");
+    func_t &f = require_func(params);
 
-    if (!init_hexrays_plugin())
-        throw std::runtime_error("Hex-Rays not available");
-
-    hexrays_failure_t hf;
-    cfuncptr_t cfunc = decompile(f, &hf);
-    if (!cfunc)
-        throw std::runtime_error("Decompilation failed");
+    cfuncptr_t cfunc = require_decompiled(f);
 
     json vars = json::array();
     lvars_t* lvars = cfunc->get_lvars();
@@ -203,7 +195,7 @@ json cmd_infer_types(const json &params)
         }
     }
 
-    return {{"ea", ea_hex(f->start_ea)}, {"variables", vars}};
+    return {{"ea", ea_hex(f.start_ea)}, {"variables", vars}};
 }
 
 json cmd_enum_upsert(const json &params)
@@ -233,7 +225,7 @@ json cmd_enum_upsert(const json &params)
 
 json cmd_read_struct(const json &params)
 {
-    ea_t ea = parse_ea(params.at("ea"));
+    ea_t ea = require_ea(params);
     std::string sname = params.at("struct_name").get<std::string>();
 
     tinfo_t tif;

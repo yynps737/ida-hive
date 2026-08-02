@@ -23,13 +23,10 @@ namespace {
 
 json cmd_basic_blocks(const json &params)
 {
-    ea_t ea = parse_ea(params.at("ea"));
-    func_t* f = get_func(ea);
-    if (!f)
-        throw std::runtime_error("No function at given address");
+    func_t &f = require_func(params);
 
     qflow_chart_t fc;
-    fc.create("", f, BADADDR, BADADDR, FC_NOEXT);
+    fc.create("", &f, BADADDR, BADADDR, FC_NOEXT);
 
     json blocks = json::array();
     for (int i = 0; i < fc.size(); i++)
@@ -54,10 +51,10 @@ json cmd_basic_blocks(const json &params)
     }
 
     qstring func_name;
-    get_func_name(&func_name, f->start_ea);
+    get_func_name(&func_name, f.start_ea);
 
     return {
-        {"ea",     ea_hex(f->start_ea)},
+        {"ea",     ea_hex(f.start_ea)},
         {"name",   func_name.c_str()},
         {"blocks", blocks},
         {"count",  fc.size()},
@@ -126,7 +123,7 @@ json cmd_callgraph(const json &params)
 json cmd_insn_query(const json &params)
 {
     std::string mnemonic = params.value("mnemonic", std::string{});
-    size_t limit = params.value("limit", 50);
+    size_t limit = opt_limit(params, 50);
 
     ea_t start, end;
     if (params.contains("ea"))
@@ -179,32 +176,29 @@ json cmd_insn_query(const json &params)
 
 json cmd_func_profile(const json &params)
 {
-    ea_t ea = parse_ea(params.at("ea"));
-    func_t* f = get_func(ea);
-    if (!f)
-        throw std::runtime_error("No function at given address");
+    func_t &f = require_func(params);
 
     qstring name;
-    get_func_name(&name, f->start_ea);
-    size_t fsize = (size_t)(f->end_ea - f->start_ea);
+    get_func_name(&name, f.start_ea);
+    size_t fsize = (size_t)(f.end_ea - f.start_ea);
 
     int caller_count = 0;
     xrefblk_t xb;
-    for (bool ok = xb.first_to(f->start_ea, XREF_ALL); ok; ok = xb.next_to())
+    for (bool ok = xb.first_to(f.start_ea, XREF_ALL); ok; ok = xb.next_to())
         if (xb.iscode) caller_count++;
 
     json callees = json::array();
     json strings = json::array();
     std::set<ea_t> seen_callees;
 
-    for (const call_edge_t &e : collect_callees(f->start_ea, f->end_ea))
+    for (const call_edge_t &e : collect_callees(f.start_ea, f.end_ea))
         callees.push_back({{"ea", ea_hex(e.callee_ea)}, {"name", func_name_of(e.callee_ea)}});
 
-    for (const string_ref_t &s : collect_string_refs(f->start_ea, f->end_ea, 20))
+    for (const string_ref_t &s : collect_string_refs(f.start_ea, f.end_ea, 20))
         strings.push_back({{"ea", ea_hex(s.ea)}, {"string", s.text}});
 
     return {
-        {"ea",       ea_hex(f->start_ea)},
+        {"ea",       ea_hex(f.start_ea)},
         {"name",     name.c_str()},
         {"size",     fsize},
         {"callers",  caller_count},

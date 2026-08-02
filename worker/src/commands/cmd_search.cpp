@@ -10,6 +10,7 @@
 
 #include "ida_hive/commands.hpp"
 #include "ida_hive/util.hpp"
+#include "ida_hive/params.hpp"
 
 #include <regex>
 #include <set>
@@ -20,7 +21,7 @@ namespace {
 json cmd_find_regex(const json &params)
 {
     std::string pattern_str = params.at("pattern").get<std::string>();
-    size_t limit = params.value("limit", 30);
+    size_t limit = opt_limit(params, 30);
 
     std::regex re(pattern_str, std::regex_constants::icase);
 
@@ -48,7 +49,7 @@ json cmd_find_regex(const json &params)
 json cmd_find_bytes(const json &params)
 {
     std::string hex = params.at("hex").get<std::string>();
-    size_t limit = params.value("limit", 10);
+    size_t limit = opt_limit(params, 10);
 
     ea_t start = params.contains("start") ? parse_ea(params["start"]) : inf_get_min_ea();
     ea_t end = inf_get_max_ea();
@@ -77,7 +78,7 @@ json cmd_find_bytes(const json &params)
 
 json cmd_imports(const json &params)
 {
-    size_t limit = params.value("limit", 100);
+    size_t limit = opt_limit(params, 100);
     std::string filter = params.value("filter", std::string{});
 
     json imports = json::array();
@@ -123,7 +124,7 @@ json cmd_func_query(const json &params)
     std::string filter = params.value("filter", std::string{});
     size_t min_size = params.value("min_size", 0);
     size_t max_size = params.value("max_size", (size_t)0xFFFFFFFF);
-    size_t limit = params.value("limit", 100);
+    size_t limit = opt_limit(params, 100);
     size_t offset = params.value("offset", 0);
 
     json funcs = json::array();
@@ -161,7 +162,7 @@ json cmd_func_query(const json &params)
 json cmd_list_globals(const json &params)
 {
     std::string filter = params.value("filter", std::string{});
-    size_t limit = params.value("limit", 100);
+    size_t limit = opt_limit(params, 100);
     size_t offset = params.value("offset", 0);
 
     json globals = json::array();
@@ -226,7 +227,7 @@ json cmd_imports_query(const json &params)
     std::string filter = params.value("filter", std::string{});
     std::string mod_filter = params.value("module", std::string{});
     size_t offset = params.value("offset", 0);
-    size_t limit = params.value("limit", 100);
+    size_t limit = opt_limit(params, 100);
 
     json imports = json::array();
     size_t matched = 0, skipped = 0;
@@ -268,7 +269,7 @@ json cmd_entity_query(const json &params)
 {
     std::string kind = params.at("kind").get<std::string>();
     std::string filter = params.value("filter", std::string{});
-    size_t limit = params.value("limit", 100);
+    size_t limit = opt_limit(params, 100);
 
     json entities = json::array();
 

@@ -8,13 +8,14 @@
 
 #include "ida_hive/commands.hpp"
 #include "ida_hive/util.hpp"
+#include "ida_hive/params.hpp"
 
 namespace ida_hive {
 namespace {
 
 json cmd_get_bytes(const json &params)
 {
-    ea_t ea = parse_ea(params.at("ea"));
+    ea_t ea = require_ea(params);
     size_t size = params.at("size").get<size_t>();
 
     if (size > 0x10000)
@@ -39,7 +40,7 @@ json cmd_get_bytes(const json &params)
 
 json cmd_patch_bytes(const json &params)
 {
-    ea_t ea = parse_ea(params.at("ea"));
+    ea_t ea = require_ea(params);
     std::string hex = params.at("hex").get<std::string>();
 
     if (hex.size() % 2 != 0)
@@ -61,7 +62,7 @@ json cmd_patch_bytes(const json &params)
 
 json cmd_get_string(const json &params)
 {
-    ea_t ea = parse_ea(params.at("ea"));
+    ea_t ea = require_ea(params);
 
     size_t len = get_max_strlit_length(ea, STRTYPE_C);
     if (len == 0)
@@ -79,7 +80,7 @@ json cmd_get_string(const json &params)
 
 json cmd_get_int(const json &params)
 {
-    ea_t ea = parse_ea(params.at("ea"));
+    ea_t ea = require_ea(params);
     int size = params.value("size", 4);
 
     uint64_t val = 0;
@@ -97,7 +98,7 @@ json cmd_get_int(const json &params)
 
 json cmd_put_int(const json &params)
 {
-    ea_t ea = parse_ea(params.at("ea"));
+    ea_t ea = require_ea(params);
     int size = params.value("size", 4);
 
     uint64_t val;

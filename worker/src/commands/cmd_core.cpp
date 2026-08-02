@@ -12,6 +12,7 @@
 
 #include "ida_hive/commands.hpp"
 #include "ida_hive/util.hpp"
+#include "ida_hive/params.hpp"
 
 namespace ida_hive {
 namespace {
@@ -33,7 +34,7 @@ json cmd_get_info(const json &params)
 json cmd_list_funcs(const json &params)
 {
     size_t offset = params.value("offset", 0);
-    size_t limit  = params.value("limit", 100);
+    size_t limit  = opt_limit(params, 100);
     std::string filter = params.value("filter", std::string{});
 
     json funcs = json::array();
