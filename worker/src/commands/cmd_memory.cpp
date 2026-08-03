@@ -169,10 +169,22 @@ json cmd_get_global_value(const json &params)
     // A value needs every byte of the variable; a partial read cannot produce one.
     const bool whole = got == vsize;
     uint64_t int_val = 0;
+    bool is_signed = false;
     if (whole && vsize <= 8)
     {
         for (size_t i = 0; i < vsize; i++)
             int_val |= ((uint64_t)buf[i]) << (i * 8);
+
+        // The variable's own type decides how its bytes read. Reporting the unsigned
+        // interpretation of a signed type contradicts the `type` field beside it:
+        // an int32_t holding 0xFFFFFFFE is -2, never 4294967294.
+        is_signed = tif.is_correct() && tif.is_signed();
+        if (is_signed && vsize < 8)
+        {
+            const uint64_t sign_bit = 1ULL << (vsize * 8 - 1);
+            if ((int_val & sign_bit) != 0)
+                int_val |= ~(sign_bit * 2 - 1);
+        }
     }
 
     qstring name;
@@ -188,7 +200,9 @@ json cmd_get_global_value(const json &params)
         {"type",      type_str.c_str()},
         {"size",      vsize},
         {"hex",       hex},
-        {"value",     whole && vsize <= 8 ? json(int_val) : json(nullptr)},
+        {"value",     whole && vsize <= 8
+                          ? (is_signed ? json((int64_t)int_val) : json(int_val))
+                          : json(nullptr)},
         {"has_value", true},
     };
     if (!whole)
