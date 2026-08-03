@@ -118,6 +118,13 @@ DWARF_TYPE_SRC = (
     "int main(void) { return (int)f(&g); }\n")
 
 
+SIGNED_SRC = (
+    "#include <stdint.h>\n"
+    "int64_t g_i64 = -2; int32_t g_i32 = -2; int16_t g_i16 = -2; int8_t g_i8 = -2;\n"
+    "uint32_t g_u32 = 4294967294u;\n"
+    "int main(void){ return (int)(g_i64+g_i32+g_i16+g_i8+g_u32); }\n")
+
+
 def _build_sample(w, source):
     """Compiles a sample and opens it in its own worker.
 
@@ -521,6 +528,27 @@ def _(w):
         assert_(beyond, "fields past the stored bytes were emitted as zeros")
         assert_(all(f["hex"] is None for f in beyond), "a field with no data still carries hex")
         return f"{raw['size']}/32 bytes stored, {len(beyond)} fields without data"
+    finally:
+        d.close()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+@check("get_global_value: a value is read as the type reported beside it")
+def _(w):
+    # The response carries the variable's type. Reporting the unsigned reading of a
+    # signed one contradicts it in the same object: an int32_t holding 0xFFFFFFFE is
+    # -2, and 4294967294 is a number that type cannot hold.
+    built = _build_sample(w, SIGNED_SRC)
+    if isinstance(built, str):
+        return built
+    d, tmp = built
+    try:
+        for name, want in (("g_i64", -2), ("g_i32", -2), ("g_i16", -2), ("g_i8", -2),
+                           ("g_u32", 4294967294)):
+            r = d("get_global_value", target=name)
+            assert_(r.get("value") == want,
+                    f"{name} ({r.get('type')}) came back as {r.get('value')}, expected {want}")
+        return "4 signed widths and 1 unsigned correct"
     finally:
         d.close()
         shutil.rmtree(tmp, ignore_errors=True)
