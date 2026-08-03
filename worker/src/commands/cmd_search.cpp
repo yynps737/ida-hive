@@ -193,35 +193,6 @@ json cmd_list_globals(const json &params)
     return {{"globals", globals}, {"matched", matched}};
 }
 
-json cmd_int_convert(const json &params)
-{
-    std::string val_str = params.at("value").get<std::string>();
-    uint64_t val = std::stoull(val_str, nullptr, 0);
-
-    char hex_buf[32], dec_buf[32], oct_buf[32];
-    qsnprintf(hex_buf, sizeof(hex_buf), "0x%llX", (unsigned long long)val);
-    qsnprintf(dec_buf, sizeof(dec_buf), "%llu", (unsigned long long)val);
-    qsnprintf(oct_buf, sizeof(oct_buf), "0%llo", (unsigned long long)val);
-
-    std::string bin = "0b";
-    if (val == 0) { bin += "0"; }
-    else {
-        bool started = false;
-        for (int bit = 63; bit >= 0; bit--) {
-            if (val & (1ULL << bit)) { bin += '1'; started = true; }
-            else if (started) { bin += '0'; }
-        }
-    }
-
-    return {
-        {"hex", hex_buf},
-        {"dec", dec_buf},
-        {"oct", oct_buf},
-        {"bin", bin},
-        {"signed", (int64_t)val},
-    };
-}
-
 json cmd_imports_query(const json &params)
 {
     std::string filter = params.value("filter", std::string{});
@@ -347,7 +318,6 @@ const command_entry_t kCommands[] = {
     { "imports",       cmd_imports },
     { "func_query",    cmd_func_query },
     { "list_globals",  cmd_list_globals },
-    { "int_convert",   cmd_int_convert },
     { "imports_query", cmd_imports_query },
     { "entity_query",  cmd_entity_query },
 };
