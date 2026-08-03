@@ -149,6 +149,35 @@ STRUCT_FIELD_SRC = (
     "int main(void){ struct rec x = {1,2,3}; return use(&x); }\n")
 
 
+TYPE_SIZE_SRC = (
+    "#include <stdio.h>\n#include <stdint.h>\n"
+    "struct plain { int a; long b; };\n"
+    "typedef struct plain plain_td;\n"
+    "typedef plain_td plain_td2;\n"
+    "union onion { uint64_t q; double d; char c[8]; };\n"
+    "enum colour { RED, GREEN, BLUE = 300 };\n"
+    "struct bits { unsigned a:1; unsigned b:3; unsigned c:12; };\n"
+    "struct flexy { int n; char tail[]; };\n"
+    "struct __attribute__((aligned(64))) overaligned { char c; };\n"
+    "typedef int (*fnptr)(int, long);\n"
+    "typedef int arr10[10];\n"
+    "struct plain gp; plain_td gt; plain_td2 gt2; union onion go; enum colour gc;\n"
+    "struct bits gb; struct flexy gf; struct overaligned gv; fnptr gfn; arr10 ga;\n"
+    "int main(void){\n"
+    "  printf(\"plain %zu\\n\", sizeof(struct plain));\n"
+    "  printf(\"plain_td %zu\\n\", sizeof(plain_td));\n"
+    "  printf(\"plain_td2 %zu\\n\", sizeof(plain_td2));\n"
+    "  printf(\"onion %zu\\n\", sizeof(union onion));\n"
+    "  printf(\"colour %zu\\n\", sizeof(enum colour));\n"
+    "  printf(\"bits %zu\\n\", sizeof(struct bits));\n"
+    "  printf(\"flexy %zu\\n\", sizeof(struct flexy));\n"
+    "  printf(\"overaligned %zu\\n\", sizeof(struct overaligned));\n"
+    "  printf(\"fnptr %zu\\n\", sizeof(fnptr));\n"
+    "  printf(\"arr10 %zu\\n\", sizeof(arr10));\n"
+    "  return gp.a+gt.a+gt2.a+(int)go.q+gc+gb.a+gf.n+gv.c+(int)(size_t)gfn+ga[0];\n"
+    "}\n")
+
+
 def _build_sample(w, source):
     """Compiles a sample and opens it in its own worker.
 
@@ -628,6 +657,48 @@ def _(w):
         assert_(all("+" in r["disasm"] or "-" in r["disasm"] for r in four),
                 f"a zero-displacement operand was returned for field 4: {four}")
         return f"{truth} references at field 0, matching objdump"
+    finally:
+        d.close()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+@check("type_inspect: every size matches what the compiler reports for the same type")
+def _(w):
+    # The sample prints its own sizeof values, so the reference comes from the
+    # compiler rather than from IDA. Bitfields, a flexible array member and an
+    # over-aligned struct are the three the arithmetic is easiest to get wrong on.
+    built = _build_sample(w, TYPE_SIZE_SRC)
+    if isinstance(built, str):
+        return built
+    d, tmp = built
+    try:
+        run = subprocess.run([str(Path(tmp) / "s")], capture_output=True, text=True)
+        truth = {}
+        for line in run.stdout.splitlines():
+            parts = line.split()
+            if len(parts) == 2 and parts[1].isdigit():
+                truth[parts[0]] = int(parts[1])
+        assert_(len(truth) == 10, f"the sample reported {len(truth)} sizes, expected 10")
+
+        missing, wrong = [], []
+        for name, want in truth.items():
+            r = d("type_inspect", name=name)
+            if "size" not in r:
+                missing.append(name)
+            elif r["size"] != want:
+                wrong.append(f"{name}: {r['size']} vs {want}")
+        assert_(not missing, f"types absent from the database: {missing}")
+        assert_(not wrong, f"sizes disagreeing with the compiler: {wrong}")
+
+        # A typedef must answer for the type it names, not for the reference.
+        assert_(d("type_inspect", name="plain_td2")["is_struct"] is True,
+                "a typedef of a typedef of a struct is not reported as a struct")
+        # A function type has no size; the BADSIZE sentinel must not leak.
+        fn = next(f for f in d("list_funcs", limit=300)["functions"] if f["name"] == "main")
+        by_ea = d("type_inspect", ea=fn["ea"])
+        assert_(by_ea["is_func"] is True and by_ea["size"] is None,
+                f"a function type came back as {by_ea}")
+        return f"{len(truth)} sizes match the compiler"
     finally:
         d.close()
         shutil.rmtree(tmp, ignore_errors=True)
