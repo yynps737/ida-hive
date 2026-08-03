@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.0.3
+
+Two tools answered questions wrongly rather than incompletely. Both were found by checking
+their output against an independent source — objdump for one, the C declaration for the other.
+
+### Fixed
+
+- **`xrefs_to_field` found nothing for the first field of any struct.** A zero-displacement
+  access is written `[reg]` and typed `o_phrase`; the search looked only at `o_displ`, which the
+  SDK defines as `[reg+N]`. An empty result asserts that a field has no references, so the answer
+  was wrong rather than short. objdump counts two such accesses in the reference sample where the
+  tool reported none.
+- **`get_global_value` contradicted the type it reported.** An `int32_t` holding `0xFFFFFFFE` came
+  back as `4294967294`, a number that type cannot hold. The variable's own type now decides how its
+  bytes read. Float, pointer and unsigned types are unaffected — IDA reports no sign for them.
+
+### Testing
+
+- A killed test harness left its IDA worker running, reparented and holding two gigabytes for as
+  long as the machine stayed up — which then made the next run more likely to be killed as well.
+  Workers now exit with the harness that spawned them.
+- The scale test kept its multi-gigabyte database in the default temp directory, which is a RAM
+  disk on most systems, and printed nothing until analysis finished — so a run that was killed left
+  no record of what it had been doing.
+
 ## 1.0.2
 
 Four defects, two from adversarial testing of the 1.0.1 tools and two found while
