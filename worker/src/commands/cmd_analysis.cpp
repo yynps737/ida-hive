@@ -229,8 +229,16 @@ json cmd_xrefs_to_field(const json &params)
 
         for (int op = 0; op < UA_MAXOP; op++)
         {
-            if (insn.ops[op].type == o_void) break;
-            if (insn.ops[op].type == o_displ && insn.ops[op].addr == (ea_t)field_offset)
+            const op_t &o = insn.ops[op];
+            if (o.type == o_void) break;
+
+            // [reg] carries no displacement and is typed o_phrase, not o_displ. Its
+            // effective offset is zero — the first field of every struct — so looking
+            // only at o_displ answers "no references" for the most common field there is.
+            const bool hit = o.type == o_displ  ? o.addr == (ea_t)field_offset
+                           : o.type == o_phrase ? field_offset == 0
+                                                : false;
+            if (hit)
             {
                 qstring dline;
                 generate_disasm_line(&dline, curr, GENDSM_REMOVE_TAGS);
