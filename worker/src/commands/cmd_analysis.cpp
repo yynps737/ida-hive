@@ -167,6 +167,11 @@ json cmd_xref_query(const json &params)
     bool code_only = params.value("code_only", false);
     size_t limit = opt_limit(params, 100);
 
+    // Neither branch runs for a value outside the three, and the empty result that
+    // follows reads as "this address has no xrefs" rather than as a rejected argument.
+    if (direction != "to" && direction != "from" && direction != "both")
+        throw std::runtime_error("direction must be 'to', 'from' or 'both', got '" + direction + "'");
+
     json refs = json::array();
 
     if (direction == "to" || direction == "both")
