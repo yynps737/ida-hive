@@ -46,6 +46,17 @@ json cmd_set_type(const json &params)
     return {{"ea", ea_hex(ea)}, {"type", applied.c_str()}, {"success", true}};
 }
 
+// The reported size of a type, or null when it has none.
+//
+// get_size() answers BADSIZE for a function and for an incomplete struct. Passed
+// through, that renders as 18446744073709551615 — a number no type can have, which
+// reads as a real answer rather than as "no size".
+json type_size(const tinfo_t &tif)
+{
+    const asize_t n = tif.get_size();
+    return (tif.is_func() || n == BADSIZE) ? json(nullptr) : json((size_t)n);
+}
+
 json cmd_type_inspect(const json &params)
 {
     tinfo_t tif;
@@ -70,14 +81,9 @@ json cmd_type_inspect(const json &params)
     qstring type_str;
     tif.print(&type_str);
 
-    // get_size() yields BADSIZE for function types; null keeps the 0xFFFF...
-    // sentinel out of the response.
-    asize_t tsize = tif.get_size();
-    json size_val = (tif.is_func() || tsize == BADSIZE) ? json(nullptr) : json((size_t)tsize);
-
     return {
         {"type",   type_str.c_str()},
-        {"size",   size_val},
+        {"size",   type_size(tif)},
         {"is_ptr", tif.is_ptr()},
         {"is_func", tif.is_func()},
         {"is_struct", tif.is_struct()},
@@ -127,7 +133,7 @@ json cmd_type_query(const json &params)
                 {"ordinal", ord},
                 {"name",    name},
                 {"type",    type_str.c_str()},
-                {"size",    (size_t)tif.get_size()},
+                {"size",    type_size(tif)},
             });
         }
     }
@@ -163,7 +169,7 @@ json cmd_search_structs(const json &params)
         structs.push_back({
             {"name", name},
             {"type", type_str.c_str()},
-            {"size", (size_t)tif.get_size()},
+            {"size", type_size(tif)},
             {"is_union", tif.is_union()},
         });
     }
