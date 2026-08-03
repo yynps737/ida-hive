@@ -178,6 +178,13 @@ TYPE_SIZE_SRC = (
     "}\n")
 
 
+XREF_SRC = (
+    "int helper(int x) { return x * 3; }\n"
+    "int caller_a(int x) { return helper(x) + 1; }\n"
+    "int caller_b(int x) { return helper(x) + 2; }\n"
+    "int main(void) { return caller_a(1) + caller_b(2) + helper(3); }\n")
+
+
 def _build_sample(w, source):
     """Compiles a sample and opens it in its own worker.
 
@@ -731,6 +738,50 @@ def _(w):
         assert_(w("type_inspect", name=name)["size"] == size,
                 f"type_query and type_inspect disagree on {name}")
     return "no sentinel, and both tools agree"
+
+
+@check("xref_query: objdump agrees on the call sites, and a bad direction is refused")
+def _(w):
+    # Neither loop runs for a direction outside the three the parameter documents, and
+    # the empty result that follows claims the address has no xrefs at all. The project
+    # refuses unknown enum values elsewhere (select_parser); this one accepted them.
+    objdump = shutil.which("objdump")
+    built = _build_sample(w, XREF_SRC)
+    if isinstance(built, str):
+        return built
+    d, tmp = built
+    try:
+        helper = next(f for f in d("list_funcs", limit=300)["functions"] if f["name"] == "helper")
+
+        if objdump is not None and platform.machine() == "x86_64":
+            dis = subprocess.run([objdump, "-d", "--no-show-raw-insn", str(Path(tmp) / "s")],
+                                 capture_output=True, text=True)
+            truth = {int(m.group(1), 16) for m in
+                     re.finditer(r"^\s*([0-9a-f]+):\s+call\s+\S+\s+<helper>", dis.stdout, re.M)}
+            assert_(truth, "objdump found no call to helper in the sample")
+            got = {int(x["from"], 16) for x in
+                   d("xref_query", ea=helper["ea"], direction="to", code_only=True)["xrefs"]}
+            assert_(truth <= got,
+                    f"call sites objdump lists are missing: {[hex(x) for x in sorted(truth - got)]}")
+            note = f"{len(truth)} call sites match objdump"
+        else:
+            note = "objdump comparison skipped (vacuous on this host)"
+
+        both = d("xref_query", ea=helper["ea"], direction="both")["count"]
+        assert_(both > 0, "the sample's helper has no xrefs at all")
+
+        for bad in ("TO", "outgoing", "", "tofrom"):
+            try:
+                r = d("xref_query", ea=helper["ea"], direction=bad)
+            except RuntimeError:
+                continue      # Refused, which is the point.
+            raise AssertionError(
+                f"direction={bad!r} was accepted and answered count={r.get('count')} "
+                f"for an address with {both} xrefs")
+        return f"{note}, 4 bad directions refused"
+    finally:
+        d.close()
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 # ---- Availability-gated subsystems ----
