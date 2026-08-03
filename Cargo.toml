@@ -1,6 +1,6 @@
 [package]
 name = "ida-hive"
-version = "1.0.2"
+version = "1.0.3"
 edition = "2021"
 description = "Native multi-instance IDA Pro MCP server — Rust coordinator + C++ idalib workers"
 
