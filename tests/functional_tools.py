@@ -19,6 +19,7 @@ Usage:
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -123,6 +124,12 @@ SIGNED_SRC = (
     "int64_t g_i64 = -2; int32_t g_i32 = -2; int16_t g_i16 = -2; int8_t g_i8 = -2;\n"
     "uint32_t g_u32 = 4294967294u;\n"
     "int main(void){ return (int)(g_i64+g_i32+g_i16+g_i8+g_u32); }\n")
+
+
+STRUCT_FIELD_SRC = (
+    "struct rec { int a; int b; long c; };\n"
+    "int use(struct rec *r) { int t = r->a; t += r->b; t += (int)r->c; r->a = t; return t; }\n"
+    "int main(void){ struct rec x = {1,2,3}; return use(&x); }\n")
 
 
 def _build_sample(w, source):
@@ -549,6 +556,57 @@ def _(w):
             assert_(r.get("value") == want,
                     f"{name} ({r.get('type')}) came back as {r.get('value')}, expected {want}")
         return "4 signed widths and 1 unsigned correct"
+    finally:
+        d.close()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+@check("xrefs_to_field: field 0 is found, and objdump agrees on the count")
+def _(w):
+    # A zero-displacement access is written [reg] and typed o_phrase, not o_displ.
+    # Matching only o_displ answers "no references" for the first field of every
+    # struct — a false statement, not a missing one. objdump supplies the count.
+    objdump = shutil.which("objdump")
+    if objdump is None:
+        return "no objdump for an independent count (vacuous)"
+
+    built = _build_sample(w, STRUCT_FIELD_SRC)
+    if isinstance(built, str):
+        return built
+    d, tmp = built
+    try:
+        binary = Path(tmp) / "s"
+        dis = subprocess.run([objdump, "-d", "--no-show-raw-insn", str(binary)],
+                             capture_output=True, text=True)
+        if dis.returncode != 0:
+            return "objdump could not read the sample (vacuous)"
+
+        body, seen = [], False
+        for line in dis.stdout.splitlines():
+            if line.endswith("<use>:"):
+                seen = True
+                continue
+            if seen:
+                if not line.strip():
+                    break
+                body.append(line)
+        assert_(body, "objdump produced no body for use()")
+
+        # `(%rax)` with nothing but a space or comma before the paren — a register
+        # indirect with no displacement. `-0x4(%rbp)` does not match.
+        truth = sum(1 for l in body if re.search(r"(?:^|[\s,])\(%r[a-z0-9]+\)", l))
+        assert_(truth > 0, "the sample compiled without a zero-displacement access")
+
+        fn = next(f for f in d("list_funcs", limit=200)["functions"] if f["name"] == "use")
+        got = d("xrefs_to_field", ea=fn["ea"], field_offset=0).get("refs", [])
+        assert_(len(got) == truth,
+                f"field 0: objdump counts {truth} zero-displacement accesses, the tool found {len(got)}")
+
+        # The o_phrase branch must not leak into a non-zero query.
+        four = d("xrefs_to_field", ea=fn["ea"], field_offset=4).get("refs", [])
+        assert_(all("+" in r["disasm"] or "-" in r["disasm"] for r in four),
+                f"a zero-displacement operand was returned for field 4: {four}")
+        return f"{truth} references at field 0, matching objdump"
     finally:
         d.close()
         shutil.rmtree(tmp, ignore_errors=True)
