@@ -19,6 +19,7 @@ Usage:
 import argparse
 import json
 import os
+import platform
 import signal
 import re
 import shutil
@@ -585,6 +586,10 @@ def _(w):
     objdump = shutil.which("objdump")
     if objdump is None:
         return "no objdump for an independent count (vacuous)"
+    # The pattern below is x86-64 AT&T. Elsewhere it would match nothing, which must
+    # read as "not checked here" rather than as a failed check.
+    if platform.machine() != "x86_64":
+        return f"the reference pattern is x86-64 only, host is {platform.machine()} (vacuous)"
 
     built = _build_sample(w, STRUCT_FIELD_SRC)
     if isinstance(built, str):

@@ -186,8 +186,11 @@ def db_root():
         return None
     if _fstype(tempfile.gettempdir()) not in ("tmpfs", "ramfs"):
         return None
-    fallback = Path.home() / ".cache" / "ida-hive"
-    fallback.mkdir(parents=True, exist_ok=True)
+    try:
+        fallback = Path.home() / ".cache" / "ida-hive"
+        fallback.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return None    # Nowhere better to put it; the default beats not running.
     return str(fallback)
 
 
