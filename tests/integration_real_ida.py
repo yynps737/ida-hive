@@ -369,6 +369,10 @@ def test_batch_concurrency_exceeds_slots(server, worker, ida, binaries, failures
 
 
 def main():
+    # Redirected stdout is block-buffered, so a run that is killed rather than
+    # returning loses everything it printed — exactly the run whose output is needed.
+    sys.stdout.reconfigure(line_buffering=True)
+
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--server", default=str(ROOT / "target" / "release" / "ida-hive"))
     ap.add_argument("--worker", default=str(ROOT / "worker" / "build-linux" / "ida_mcp_worker"))

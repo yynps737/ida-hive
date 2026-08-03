@@ -276,6 +276,10 @@ def _run(worker_path, target, ida_path, tmp, failures, commands):
 
 
 def main():
+    # Redirected stdout is block-buffered, so a run that is killed rather than
+    # returning loses everything it printed — exactly the run whose output is needed.
+    sys.stdout.reconfigure(line_buffering=True)
+
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--worker", default=str(ROOT / "worker" / "build-linux" / "ida_mcp_worker"))
     ap.add_argument("--target", default="/usr/bin/grep")
