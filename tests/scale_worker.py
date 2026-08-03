@@ -140,14 +140,54 @@ MAX_RESPONSE_MB = 24.0
 MAX_SWEEP_SECONDS = 60.0
 
 
+def _fstype(path):
+    """Filesystem type backing `path`, or None when it cannot be determined."""
+    try:
+        mounts = Path("/proc/mounts").read_text().splitlines()
+    except OSError:
+        return None
+    target = str(Path(path).resolve())
+    point, fstype = "", None
+    for line in mounts:
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        mount = parts[1]
+        if (target == mount or target.startswith(mount.rstrip("/") + "/")) and len(mount) >= len(point):
+            point, fstype = mount, parts[2]
+    return fstype
+
+
+def db_root():
+    """Where the database this test builds should live.
+
+    It reaches gigabytes, and the default temp directory is a RAM disk on many
+    systems — where it competes for memory with the worker's own 2 GB resident set,
+    and the pair can exhaust it. An explicitly set TMPDIR is a deliberate choice and
+    is left alone; mkdtemp already honours it.
+    """
+    if os.environ.get("TMPDIR"):
+        return None
+    if _fstype(tempfile.gettempdir()) not in ("tmpfs", "ramfs"):
+        return None
+    fallback = Path.home() / ".cache" / "ida-hive"
+    fallback.mkdir(parents=True, exist_ok=True)
+    return str(fallback)
+
+
 def run(worker_path, target, ida_path, failures, tmp):
+    # Announced before the open, not after: analysis of a large binary blocks for
+    # minutes, and a run killed in that window would otherwise say nothing at all
+    # about what it was doing.
+    print(f"  target: {Path(target).name}  {Path(target).stat().st_size / 2**20:.0f} MiB")
+    print(f"  analysing (blocks until IDA finishes; minutes on a large binary)")
+
     started = time.time()
     w = Worker(worker_path, target, tmp, ida_path)
     analysis = time.time() - started
     total_funcs = w.ready.get("functions", 0)
     baseline = rss_mb(w.pid)
 
-    print(f"  target: {Path(target).name}  {Path(target).stat().st_size / 2**20:.0f} MiB")
     print(f"  analysis: {analysis:.0f}s, {total_funcs} functions, RSS {baseline} MiB")
 
     # 1. Table sweeps stay bounded.
@@ -232,6 +272,11 @@ def run(worker_path, target, ida_path, failures, tmp):
 
 
 def main():
+    # Redirected stdout is block-buffered, so a run that is killed rather than
+    # returning loses everything it printed — exactly the run whose output is needed.
+    # This test takes about twenty minutes and is the likeliest to be killed.
+    sys.stdout.reconfigure(line_buffering=True)
+
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--worker", default=str(ROOT / "worker" / "build-linux" / "ida_mcp_worker"))
     ap.add_argument("--target")
@@ -253,10 +298,9 @@ def main():
 
     failures = []
     started = time.time()
-    # The database this builds is measured in gigabytes, and /tmp is a RAM disk on
-    # many systems. run() returns early on several failures, so the removal has to be
-    # in a finally rather than at the end of the body.
-    tmp = tempfile.mkdtemp(prefix="ida-hive-scale-")
+    # run() returns early on several failures, so the removal has to be in a finally
+    # rather than at the end of the body.
+    tmp = tempfile.mkdtemp(prefix="ida-hive-scale-", dir=db_root())
     try:
         run(args.worker, target, args.ida, failures, tmp)
     finally:
