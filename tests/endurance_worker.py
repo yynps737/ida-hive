@@ -47,6 +47,21 @@ def fd_count(pid):
         return None
 
 
+def die_with_parent():
+    """Ask the kernel to kill this child when its parent goes away.
+
+    A harness killed outright — by a memory-pressure policy, most often — runs no
+    cleanup, and the IDA worker it spawned is reparented and keeps running. Each one
+    holds its resident set for as long as the machine is up, which is then the reason
+    the next run gets killed too.
+    """
+    try:
+        import ctypes
+        ctypes.CDLL("libc.so.6", use_errno=True).prctl(1, signal.SIGKILL)  # PR_SET_PDEATHSIG
+    except Exception:
+        pass
+
+
 class Worker:
     def __init__(self, worker, target, db_dir, ida_path):
         env = os.environ.copy()
@@ -56,7 +71,7 @@ class Worker:
         self.proc = subprocess.Popen(
             [str(worker), str(target), str(db_dir)],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            env=env, text=True, bufsize=1, encoding="utf-8", errors="replace",
+            env=env, text=True, bufsize=1, encoding="utf-8", errors="replace", preexec_fn=die_with_parent,
         )
         self.next_id = 1
         self.ready = None
