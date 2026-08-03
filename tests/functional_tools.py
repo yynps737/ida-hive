@@ -704,6 +704,35 @@ def _(w):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+@check("type_query: a type with no size reports none, not the BADSIZE sentinel")
+def _(w):
+    # get_size() answers BADSIZE for a function and for an incomplete struct. Passed
+    # through it renders as 18446744073709551615, a size no type can have — and it
+    # contradicts type_inspect, which answers null for the very same type.
+    BADSIZE = 0xFFFFFFFFFFFFFFFF
+    w("declare_type", decl="struct fnc_incomplete_t;")
+    w("declare_type", decl="typedef int fnc_fn_t(int, long);")
+    w("declare_type", decl="struct fnc_sized_t { int a; long b; };")
+
+    seen = {}
+    for name in ("fnc_incomplete_t", "fnc_fn_t", "fnc_sized_t"):
+        rows = w("type_query", filter=name).get("types", [])
+        row = next((r for r in rows if r["name"] == name), None)
+        assert_(row is not None, f"{name} was declared but type_query does not list it")
+        seen[name] = row["size"]
+
+    assert_(BADSIZE not in seen.values(), f"the BADSIZE sentinel reached the response: {seen}")
+    assert_(seen["fnc_incomplete_t"] is None, f"an incomplete struct reported {seen['fnc_incomplete_t']}")
+    assert_(seen["fnc_fn_t"] is None, f"a function type reported {seen['fnc_fn_t']}")
+    assert_(seen["fnc_sized_t"] == 16, f"a sized struct reported {seen['fnc_sized_t']}, expected 16")
+
+    # The two tools must not disagree about the same type.
+    for name, size in seen.items():
+        assert_(w("type_inspect", name=name)["size"] == size,
+                f"type_query and type_inspect disagree on {name}")
+    return "no sentinel, and both tools agree"
+
+
 # ---- Availability-gated subsystems ----
 
 @check("index_status: availability is reported, never guessed")
