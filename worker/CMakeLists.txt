@@ -21,7 +21,7 @@ if(NOT EXISTS "${_idasdk_init}")
 endif()
 include("${_idasdk_init}")
 
-project(ida_mcp_worker VERSION 1.0.3)
+project(ida_mcp_worker VERSION 1.0.4)
 
 # Mirrors the SDK's own src/CMakeLists.txt. CXX_EXTENSIONS and CXX_STANDARD_REQUIRED
 # are deliberately left at their defaults, matching how IDA itself is compiled;
