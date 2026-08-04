@@ -198,6 +198,16 @@ CFG_SRC = (
     "int main(void) { return cfg(13) + cfg(3); }\n")
 
 
+STRUCTS_SRC = (
+    "struct alpha { int a; };\n"
+    "struct beta { long b; char c; };\n"
+    "union gamma_u { int i; float f; };\n"
+    "union delta_u { long l; double d; char s[8]; };\n"
+    "struct nested { struct alpha in; union gamma_u u; };\n"
+    "struct alpha g1; struct beta g2; union gamma_u g3; union delta_u g4; struct nested g5;\n"
+    "int main(void){ return g1.a+(int)g2.b+g3.i+(int)g4.l+g5.in.a; }\n")
+
+
 def _build_sample(w, source):
     """Compiles a sample and opens it in its own worker.
 
@@ -869,6 +879,42 @@ def _(w):
                 f"missing {[hex(x) for x in sorted(leaders - starts)]}, "
                 f"extra {[hex(x) for x in sorted(starts - leaders)]}")
         return f"{len(leaders)} leaders match objdump, edges dual"
+    finally:
+        d.close()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+@check("search_structs: finds every declared struct and union, and the filter only narrows")
+def _(w):
+    # The C source names the complete set, so a type that fails to appear is a real
+    # omission. The limit must count matches rather than scanned ordinals — applied
+    # the other way round, a filtered query with a small limit returns nothing.
+    built = _build_sample(w, STRUCTS_SRC)
+    if isinstance(built, str):
+        return built
+    d, tmp = built
+    try:
+        want = {"alpha": False, "beta": False, "nested": False,
+                "gamma_u": True, "delta_u": True}
+        rows = {r["name"]: r for r in d("search_structs", limit=10000)["structs"]}
+        for name, is_union in want.items():
+            assert_(name in rows, f"{name} is declared in the sample but was not found")
+            assert_(rows[name]["is_union"] == is_union,
+                    f"{name}: is_union={rows[name]['is_union']}, expected {is_union}")
+            assert_(isinstance(rows[name]["size"], int) and rows[name]["size"] > 0,
+                    f"{name}: size came back as {rows[name]['size']}")
+
+        for needle in ("alpha", "_u", "zzz"):
+            got = {r["name"] for r in
+                   d("search_structs", filter=needle, limit=10000)["structs"]}
+            stray = {n for n in got if needle not in n}
+            assert_(not stray, f"filter {needle!r} returned names without it: {sorted(stray)}")
+
+        # Two unions match "_u"; asking for one must yield one, not zero.
+        one = d("search_structs", filter="_u", limit=1)["structs"]
+        assert_(len(one) == 1, f"filter with limit=1 returned {len(one)} rows")
+        assert_("_u" in one[0]["name"], f"limit=1 returned {one[0]['name']}, which does not match")
+        return f"{len(want)} types found, filter narrows, limit counts matches"
     finally:
         d.close()
         shutil.rmtree(tmp, ignore_errors=True)
