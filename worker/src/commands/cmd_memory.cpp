@@ -114,16 +114,26 @@ json cmd_put_int(const json &params)
     else
         val = params["value"].get<uint64_t>();
 
+    // A value wider than `size` is stored as its low bytes, which is what patching
+    // means. Echoing the argument instead of what landed makes the response disagree
+    // with what get_int reads back at the very same address.
+    uint64_t stored;
     switch (size)
     {
-        case 1: patch_byte(ea, (uint8_t)val); break;
-        case 2: patch_word(ea, (uint16_t)val); break;
-        case 4: patch_dword(ea, (uint32_t)val); break;
-        case 8: patch_qword(ea, val); break;
+        case 1: stored = (uint8_t)val;  patch_byte(ea, (uint8_t)stored);   break;
+        case 2: stored = (uint16_t)val; patch_word(ea, (uint16_t)stored);  break;
+        case 4: stored = (uint32_t)val; patch_dword(ea, (uint32_t)stored); break;
+        case 8: stored = val;           patch_qword(ea, stored);           break;
         default: throw std::runtime_error("Size must be 1, 2, 4, or 8");
     }
 
-    return {{"ea", ea_hex(ea)}, {"value", val}, {"size", size}, {"success", true}};
+    json out = {{"ea", ea_hex(ea)}, {"value", stored}, {"size", size}, {"success", true}};
+    if (stored != val)
+    {
+        out["requested"] = val;
+        out["truncated"] = true;
+    }
+    return out;
 }
 
 json cmd_get_global_value(const json &params)
