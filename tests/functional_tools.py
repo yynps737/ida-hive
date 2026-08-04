@@ -185,6 +185,19 @@ XREF_SRC = (
     "int main(void) { return caller_a(1) + caller_b(2) + helper(3); }\n")
 
 
+CFG_SRC = (
+    "int sink(int);\n"
+    "int cfg(int n) {\n"
+    "  int s = 0;\n"
+    "  if (n > 10) { s = n * 2; } else { s = n + 7; }\n"
+    "  while (n > 0) { s += n; n--; }\n"
+    "  if (s & 1) s = sink(s);\n"
+    "  return s;\n"
+    "}\n"
+    "int sink(int x) { return x ^ 0x5A; }\n"
+    "int main(void) { return cfg(13) + cfg(3); }\n")
+
+
 def _build_sample(w, source):
     """Compiles a sample and opens it in its own worker.
 
@@ -779,6 +792,83 @@ def _(w):
                 f"direction={bad!r} was accepted and answered count={r.get('count')} "
                 f"for an address with {both} xrefs")
         return f"{note}, 4 bad directions refused"
+    finally:
+        d.close()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+@check("basic_blocks: boundaries match objdump's leaders and the edges are dual")
+def _(w):
+    # Leaders are the entry, every jump target, and every instruction after a jump.
+    # Calls do not end a block — FC_CALL_ENDS is not set — so the instruction after a
+    # call is not a leader. A miscomputed boundary shows up as a difference here, and
+    # an off-by-one in the successor indexing breaks the duality below.
+    built = _build_sample(w, CFG_SRC)
+    if isinstance(built, str):
+        return built
+    d, tmp = built
+    try:
+        fn = next(f for f in d("list_funcs", limit=300)["functions"] if f["name"] == "cfg")
+        r = d("basic_blocks", ea=fn["ea"])
+        blocks = r["blocks"]
+        assert_(blocks, "the sample's cfg() produced no basic blocks")
+        assert_(r["count"] == len(blocks), f"count {r['count']} vs {len(blocks)} blocks")
+
+        for b in blocks:
+            start, end = int(b["start"], 16), int(b["end"], 16)
+            assert_(end > start, f"block {b['id']} ends at or before it starts")
+            assert_(b["size"] == end - start, f"block {b['id']} size disagrees with its endpoints")
+            for key in ("succs", "preds"):
+                for x in b[key]:
+                    assert_(0 <= x < len(blocks), f"block {b['id']} {key} holds out-of-range {x}")
+
+        for b in blocks:
+            for succ in b["succs"]:
+                assert_(b["id"] in blocks[succ]["preds"],
+                        f"edge {b['id']}->{succ} has no matching predecessor")
+            for pred in b["preds"]:
+                assert_(b["id"] in blocks[pred]["succs"],
+                        f"edge {pred}->{b['id']} has no matching successor")
+
+        spans = sorted((int(b["start"], 16), int(b["end"], 16)) for b in blocks)
+        for (s1, e1), (s2, _) in zip(spans, spans[1:]):
+            assert_(e1 <= s2, f"blocks [{s1:x},{e1:x}) and {s2:x} overlap")
+
+        objdump = shutil.which("objdump")
+        if objdump is None or platform.machine() != "x86_64":
+            return f"{len(blocks)} blocks, edges dual (leader comparison vacuous on this host)"
+
+        dis = subprocess.run([objdump, "-d", "--no-show-raw-insn", str(Path(tmp) / "s")],
+                             capture_output=True, text=True).stdout
+        body, seen = [], False
+        for line in dis.splitlines():
+            if line.endswith("<cfg>:"):
+                seen = True
+                continue
+            if seen:
+                if not line.strip():
+                    break
+                m = re.match(r"\s*([0-9a-f]+):\s+(\S+)\s*(.*)", line)
+                if m:
+                    body.append((int(m.group(1), 16), m.group(2), m.group(3)))
+        assert_(body, "objdump produced no body for cfg()")
+
+        addrs = [a for a, _, _ in body]
+        leaders = {addrs[0]}
+        for i, (_, mnemonic, ops) in enumerate(body):
+            if mnemonic.startswith("j"):
+                target = re.match(r"([0-9a-f]+)", ops)
+                if target:
+                    leaders.add(int(target.group(1), 16))
+                if i + 1 < len(body):
+                    leaders.add(addrs[i + 1])
+        leaders = {a for a in leaders if addrs[0] <= a <= addrs[-1]}
+
+        starts = {int(b["start"], 16) for b in blocks}
+        assert_(leaders == starts,
+                f"missing {[hex(x) for x in sorted(leaders - starts)]}, "
+                f"extra {[hex(x) for x in sorted(starts - leaders)]}")
+        return f"{len(leaders)} leaders match objdump, edges dual"
     finally:
         d.close()
         shutil.rmtree(tmp, ignore_errors=True)
