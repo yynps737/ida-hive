@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.0.4
+
+Two tools answered with something that could not be true. Both were found by asking a
+second source the same question — objdump in one case, the tool's own sibling in the other.
+
+### Fixed
+
+- **`type_query` reported a size of 18446744073709551615.** `get_size()` answers BADSIZE for
+  a function and for an incomplete struct; `type_inspect` had guarded against that since it
+  was fixed, and its two siblings had not — so the two tools gave different answers for the
+  same type. The three call sites now share one helper, and a type with no size reports none.
+- **`xref_query` accepted any `direction` and answered nothing.** Values outside the three the
+  parameter documents entered neither branch, and the empty result read as "this address has
+  no xrefs" — for an address that had four. An unrecognised direction is now refused, which is
+  what the server already did for an unknown source language.
+
+### Testing
+
+- Assertions over `type_inspect`, `type_query`, `xref_query` and `xrefs_to_field`, each checked
+  against a source outside IDA: the compiler's own `sizeof`, and objdump's disassembly.
+- The remaining test harnesses print line-buffered. A run killed rather than returned used to
+  leave an empty log, which is exactly the run whose output is wanted.
+- `int_convert` had a second implementation left in the worker after the tool moved to the
+  coordinator. It was unreachable and had drifted — `"0x"` and `"08"` returned 0 there while
+  the live one rejects them.
+
 ## 1.0.3
 
 Two tools answered questions wrongly rather than incompletely. Both were found by checking
