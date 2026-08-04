@@ -920,6 +920,35 @@ def _(w):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+@check("put_int: the value reported is the one stored, not the one asked for")
+def _(w):
+    # Patching a value wider than the size keeps its low bytes, which is correct.
+    # Echoing the argument instead makes the write report a number that get_int then
+    # contradicts at the very same address — and it happens for -1 into four bytes,
+    # which is an ordinary thing to want.
+    ea = w("get_info")["entry"]
+    original = w("get_bytes", ea=ea, size=8)["hex"]
+    try:
+        for value, size in (("0x1234", 1), ("0x12345678", 2), ("0x123456789ABCDEF0", 4),
+                            ("0x100", 1), ("-1", 4), ("0x7F", 1), ("0xDEADBEEF", 4)):
+            wrote = w("put_int", ea=ea, value=value, size=size)
+            read = w("get_int", ea=ea, size=size)
+            assert_(wrote["value"] == read["value"],
+                    f"put_int({value}, size={size}) reported {wrote['value']}, "
+                    f"get_int reads {read['value']}")
+            assert_(wrote["success"] is True, f"put_int({value}) did not report success")
+
+        # A value that did not fit must say so rather than look like an exact write.
+        narrowed = w("put_int", ea=ea, value="0x1234", size=1)
+        assert_(narrowed.get("truncated") is True and narrowed.get("requested") == 0x1234,
+                f"a truncated write did not report it: {narrowed}")
+        exact = w("put_int", ea=ea, value="0x7F", size=1)
+        assert_("truncated" not in exact, f"an exact write was marked truncated: {exact}")
+        return "7 writes agree with the read-back"
+    finally:
+        w("patch_bytes", ea=ea, hex=original)
+
+
 # ---- Availability-gated subsystems ----
 
 @check("index_status: availability is reported, never guessed")
