@@ -75,6 +75,16 @@ impl Coordinator {
         // the worker an absolute path to save against. An unresolvable path is
         // passed through so the worker reports the real open error.
         let canonical = std::fs::canonicalize(path).map_or_else(|_| path.to_string(), |p| p.to_string_lossy().into_owned());
+        // On Windows canonicalize returns a verbatim \\?\ path. The idalib worker
+        // reads files through the MSVC CRT, whose fopen rejects that prefix, so
+        // open_database fails with ENOENT. Strip it for drive and UNC forms.
+        let canonical = if let Some(rest) = canonical.strip_prefix(r"\\?\UNC\") {
+            format!(r"\\{rest}")
+        } else if let Some(rest) = canonical.strip_prefix(r"\\?\") {
+            rest.to_string()
+        } else {
+            canonical
+        };
         let path = canonical.as_str();
 
         let plock = self.lock_for_path(path).await;
@@ -173,10 +183,14 @@ impl Coordinator {
             // Clears the worker's own bound by 10s so it reports the timeout first.
             "wait_analysis" => {
                 // Clamped into range first, so the conversion cannot lose a value.
+                // Ceiling matches IDA_MCP_OPEN_TIMEOUT's: the README's own numbers
+                // (a 198 MB binary taking ~1100 s to analyze) exceed 600 s, so a
+                // tighter clamp here would time batch_convert out on exactly the
+                // large inputs the tool exists for.
                 let max_sec = params.get("max_seconds")
                     .and_then(serde_json::Value::as_i64)
                     .unwrap_or(300)
-                    .clamp(0, 600)
+                    .clamp(0, 3600)
                     .unsigned_abs();
                 Duration::from_secs(max_sec + 10)
             }
