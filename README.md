@@ -3,21 +3,26 @@
 A native multi-instance IDA Pro MCP server built with Rust and C++.
 
 Each binary or database you open gets its own dedicated `idalib` worker process. No session
-switching, no GIL, no Python runtime. AI models can query saved `.i64/.idb` databases — or raw
+switching, no Python API bridge or GIL-bound request dispatch. AI models can query saved `.i64/.idb` databases — or raw
 binaries that IDA can load directly — through a single MCP endpoint.
 
-> **Requires IDA Pro 9.4** with a valid license. This project uses the IDA SDK `idalib` API.
+> **Requires IDA Pro 9.4 or 9.5** with a valid license and a worker built with the matching SDK.
+> This project uses the IDA SDK `idalib` API. 9.5 validation currently targets the beta build below.
 > No SDK source code or binaries are included.
 
 ## Platform status
 
-- **Target**: IDA 9.4 only. The worker builds against the public `HexRaysSA/ida-sdk` tag
-  `v9.4.0-release` and is not tested on earlier runtimes. 9.4 replaced the SDK's
-  `bootstrap.cmake` with `cmake/idasdk_init.cmake`, so 9.2 and 9.3 no longer configure.
+- **SDKs**: IDA 9.4 (`v9.4.0-release`) and 9.5 (public SDK commit
+  [`05a7724800b9e231b3edabf53c5ad4598973edb2`](https://github.com/HexRaysSA/ida-sdk/commit/05a7724800b9e231b3edabf53c5ad4598973edb2)).
+  The build/check and release workflows default to the pinned 9.5 SDK; use the 9.4 tag for a 9.4 runtime.
+  SDKs 9.2/9.3 use the older `bootstrap.cmake` layout and do not configure.
+- **macOS ARM64**: built and validated on IDA `9.5.261001.a12ef234`. Native decompilation,
+  microcode, concurrent workers, batch conversion, tool correctness, stress and endurance checks pass.
+  The same sources also compile against the 9.4 SDK; a 9.4 Mac runtime was not tested.
 - **Linux**: built and validated from source on Ubuntu 26.04.
 - **Windows**: supported by the same codebase; release assets and the original performance numbers
   were Windows-first. The Windows build path below is unchanged but was not re-validated here.
-- **Single codebase**: one MCP contract and one tool surface across both platforms.
+- **Single codebase**: one MCP contract and one tool surface across Linux, Windows and macOS.
 
 ## Why
 
@@ -47,7 +52,8 @@ Claude / Codex / any MCP client
   lifecycle. Built on [rmcp](https://github.com/modelcontextprotocol/rust-sdk) 3.x. Requests are
   handled concurrently — a slow call on one session does not block other sessions.
 - **Worker** (C++): a headless `idalib` process. Loads one `.i64/.idb` or raw binary, answers JSON
-  commands by calling the IDA SDK directly. No Python layer.
+  commands by calling the IDA SDK directly. IDA may load its bundled plugins, including IDAPython;
+  ida-hive does not route requests through them.
 
 ## Concurrency & isolation
 
@@ -134,7 +140,8 @@ Not included by design: debugger tools (use x64dbg/WinDbg) and Python eval (no P
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs on every push and pull request. A hosted runner has
+`.github/workflows/ci.yml` runs on every push and pull request. Linux compile jobs cover both SDKs;
+the Windows job uses 9.5, and the license-free gate runs on Linux and macOS. A hosted runner has
 no IDA license, so it covers the four steps that need none — the Rust build, the
 lint policy, the C++ worker compiled and linked against the public SDK, and the
 coordinator suite driven by a mock worker.
@@ -154,16 +161,22 @@ The script lists every step it skipped, so a green run never reads as a full pas
 
 ### Prerequisites
 
-- IDA Pro 9.4 installed and activated
-- The IDA SDK `v9.4.0-release` tree (below)
+- IDA Pro 9.4 or 9.5 installed and activated
+- The matching IDA SDK tree (below)
 - CMake 3.27+
 - Rust toolchain (`rustup`)
-- GCC/Clang on Linux, or MSVC 2022+ on Windows
+- GCC/Clang on Linux, AppleClang on macOS, or MSVC 2022+ on Windows
 
 ### SDK setup
 
 ```bash
-git clone --branch v9.4.0-release --depth 1 https://github.com/HexRaysSA/ida-sdk.git /path/to/ida-sdk
+# IDA 9.5 beta SDK, pinned rather than following the moving main branch:
+git init /path/to/ida-sdk
+git -C /path/to/ida-sdk fetch --depth 1 https://github.com/HexRaysSA/ida-sdk.git 05a7724800b9e231b3edabf53c5ad4598973edb2
+git -C /path/to/ida-sdk checkout --detach FETCH_HEAD
+
+# For IDA 9.4, use its release tag in a separate directory:
+git clone --branch v9.4.0-release --depth 1 https://github.com/HexRaysSA/ida-sdk.git /path/to/ida-sdk-9.4
 ```
 
 ### Build environment
@@ -172,14 +185,30 @@ Two variables drive the worker build:
 
 - `IDASDK` — point at the SDK's **`src` subdirectory** (e.g. `/path/to/ida-sdk/src`). This is the
   layout the worker's CMake resolves headers against.
-- `IDABIN` — your **IDA install directory** (where `libidalib.so` / `libida.so` live), so the worker
-  links against the runtime libraries.
+- `IDABIN` — your **IDA runtime directory** (where `libidalib.so`, `libidalib.dylib` or `idalib.dll`
+  lives). On macOS this is the app's `Contents/MacOS` directory. SDK stubs provide the link interface;
+  a real runtime is needed to execute the worker.
+
+### macOS ARM64 build
+
+```bash
+export IDASDK=/path/to/ida-sdk/src
+export IDABIN="/Applications/IDA Professional 9.5.app/Contents/MacOS"
+cmake -S worker -B worker/build-macos -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64
+cmake --build worker/build-macos --parallel 8
+cargo build --release --locked
+scripts/build_check.sh
+```
+
+Artifacts are `target/release/ida-hive` and `worker/build-macos/ida_mcp_worker`.
+The worker's build rpath points at `IDABIN`; the configured SDK/runtime paths are also retained
+when CMake regenerates without the original environment.
 
 ### Linux build
 
 ```bash
 export IDASDK=/path/to/ida-sdk/src
-export IDABIN=/path/to/IDA-install        # e.g. /home/you/ida-pro-9.4
+export IDABIN=/path/to/IDA-install        # e.g. /home/you/ida-pro-9.5
 cmake -S worker -B worker/build-linux -DCMAKE_BUILD_TYPE=Release
 cmake --build worker/build-linux -j"$(nproc)"
 cargo build --release
@@ -196,7 +225,7 @@ worker/build-linux/ida_mcp_worker
 
 ```bat
 set IDASDK=C:\path\to\ida-sdk\src
-set IDABIN=C:\Program Files\IDA Professional 9.4
+set IDABIN=C:\Program Files\IDA Professional 9.5
 cmake -S worker -B worker/build
 cmake --build worker/build --config Release
 cargo build --release --target x86_64-pc-windows-msvc
@@ -220,8 +249,17 @@ environment. The coordinator reads these variables:
 | `IDA_MCP_MAX_SLOTS` | max concurrent worker processes | `100` |
 | `IDA_MCP_OPEN_TIMEOUT` | seconds to wait for a worker to become ready (raw-binary analysis can be long) | `600` |
 
-On Linux the IDA install directory must also be on `LD_LIBRARY_PATH` (for `libidalib.so`); on Windows
-it must be on `PATH`.
+On Linux the runtime directory must be on `LD_LIBRARY_PATH`; on macOS use the build rpath or
+`DYLD_LIBRARY_PATH`; on Windows it must be on `PATH`.
+
+### macOS wrapper
+
+```bash
+#!/usr/bin/env bash
+export DYLD_LIBRARY_PATH="/Applications/IDA Professional 9.5.app/Contents/MacOS:${DYLD_LIBRARY_PATH:-}"
+export IDA_MCP_WORKER_EXE="/path/to/ida-hive/worker/build-macos/ida_mcp_worker"
+exec /path/to/ida-hive/target/release/ida-hive
+```
 
 ### Linux wrapper
 
@@ -238,7 +276,7 @@ exec /path/to/target/release/ida-hive
 
 ```bat
 @echo off
-set "PATH=C:\Program Files\IDA Professional 9.4;%PATH%"
+set "PATH=C:\Program Files\IDA Professional 9.5;%PATH%"
 set "IDA_MCP_WORKER_EXE=C:\path\to\ida_mcp_worker.exe"
 set "IDA_MCP_MAX_SLOTS=100"
 C:\path\to\ida-hive.exe
@@ -254,7 +292,7 @@ Point your MCP client at the wrapper:
 }
 ```
 
-Restart your MCP client; the 64 tools appear automatically.
+Restart your MCP client; the 103 tools appear automatically.
 
 ## Usage
 
@@ -295,6 +333,9 @@ AI:   → batch_convert(paths=[…], output_dir="…/i64", concurrency=4)
   shutdown (client closing the connection) cleans them up.
 - Cross-process concurrency is also bounded by your IDA **license seats**; if a worker can't acquire
   a license it fails fast with a clear `init_error`.
+- Standalone workers close their database on stdin EOF or the `shutdown` command. Raw inputs use
+  the SDK's database initialization API to keep temporary files private without restarting the
+  9.5 kernel and duplicating IDAPython's Hex-Rays cleanup callbacks (`30500`).
 
 ## Testing
 
@@ -303,9 +344,12 @@ Local smoke / batch scripts (cross-platform MCP round-trips):
 ```bash
 python tests/live/test_smoke.py /path/to/binary
 python tests/live/test_batch.py /path/to/binary1 /path/to/binary2
+IDABIN=/path/to/ida python3 tests/worker_lifecycle.py --worker /path/to/ida_mcp_worker
 ```
 
 - `tests/live/test_smoke.py` — open → analyze → survey → decompile → batch_convert → close.
+- `tests/worker_lifecycle.py` — real EOF/shutdown exit status, decompile/microcode before close,
+  read-only input directories, saved-database isolation and loader failure reporting.
 - `tests/live/test_batch.py` — exercises `batch_convert` end-to-end.
 - `scripts/full_e2e_sample.sh` — a deeper, Windows-oriented sample for a known PE target.
 

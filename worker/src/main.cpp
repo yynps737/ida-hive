@@ -6,6 +6,7 @@
 #include <loader.hpp>
 #include <auto.hpp>
 #include <idalib.hpp>
+#include <kernwin.hpp>
 #include <fpro.h>
 
 #include "ida_hive/protocol.hpp"
@@ -19,6 +20,41 @@ std::string g_db_dir;
 }  // namespace ida_hive
 
 using namespace ida_hive;
+
+namespace {
+#if IDA_SDK_VERSION >= 950
+int open_private_binary(const char* input_path)
+{
+    // open_database(..., "-odb") reinitializes the kernel to parse its options.
+    // On 9.5 this restarts IDAPython's interpreter, registers its Hex-Rays
+    // lifecycle callbacks twice, and hits assertion 30500 at close. The kernel
+    // database API accepts argv directly without restarting the initialized
+    // library. A bare -odb still keeps every database/lock file in our cwd;
+    // the original input path (including spaces and debug-file location) stays
+    // intact.
+    const char* db_argv[] = {"idalib", "-odb", input_path};
+    int newfile = 0;
+    struct ExitThrowGuard {
+        bool previous = set_qexit_throws(true);
+        ~ExitThrowGuard() { set_qexit_throws(previous); }
+    } guard;
+
+    try
+    {
+        int rc = init_database(3, db_argv, &newfile);
+        if (rc == 0)
+            auto_wait();
+        return rc;
+    }
+    catch (const qexit_exc_t& error)
+    {
+        // Like open_database(), surface a loader failure as init_error instead
+        // of terminating before the coordinator can read its cause.
+        return error.code != 0 ? error.code : 1;
+    }
+}
+#endif
+}  // namespace
 
 int main(int argc, char* argv[])
 {
@@ -57,8 +93,8 @@ int main(int argc, char* argv[])
 
     // A database and a raw binary reach the private dir by different routes: the
     // former is copied into it, the latter redirects its output there.
-    std::string open_path = input_path;   // what open_database loads
-    std::string open_args;                // IDA CLI args (e.g. -odb)
+    std::string open_path = input_path;   // what the database loader opens
+    bool private_binary = !is_idb && !db_dir.empty();
     if (!db_dir.empty())
     {
         if (is_idb)
@@ -83,9 +119,8 @@ int main(int argc, char* argv[])
         }
         else
         {
-            // chdir + bare "-odb", never "-o<abspath>/db": IDA re-tokenizes the args
-            // string on spaces and treats '\' as an escape, which corrupts absolute
-            // paths. "-odb" contains neither. The positional input path is exempt.
+            // A bare -odb redirects output here. The database API receives the
+            // original input as one argv element, with no shell/string parsing.
             if (qchdir(db_dir.c_str()) != 0)
             {
                 send_event("init_error", {
@@ -96,26 +131,36 @@ int main(int argc, char* argv[])
                 LOG("qchdir(%s) failed", db_dir.c_str());
                 return 1;
             }
-            open_args = "-odb";
         }
     }
 
-    LOG("Opening %s: %s%s%s", is_idb ? "database" : "binary", input_path,
-        open_args.empty() ? "" : " ", open_args.c_str());
+    LOG("Opening %s: %s%s", is_idb ? "database" : "binary", input_path,
+        private_binary ? " (private database)" : "");
 
-    // The second argument runs auto-analysis, and does so to completion: for a raw
-    // binary this call is where the minutes go.
-    rc = open_database(open_path.c_str(), !is_idb,
-                       open_args.empty() ? nullptr : open_args.c_str());
+    // Both raw-input paths run auto-analysis to completion. Existing databases
+    // open without another analysis pass or any kernel-reinitializing options.
+    const char* open_stage = "open_database";
+#if IDA_SDK_VERSION >= 950
+    if (private_binary)
+    {
+        open_stage = "init_database";
+        rc = open_private_binary(open_path.c_str());
+    }
+    else
+        rc = open_database(open_path.c_str(), !is_idb);
+#else
+    // Preserve the 9.4 wrapper, whose SDK predates qexit exception handling.
+    rc = open_database(open_path.c_str(), !is_idb, private_binary ? "-odb" : nullptr);
+#endif
     if (rc != 0)
     {
         send_event("init_error", {
-            {"stage",   "open_database"},
+            {"stage",   open_stage},
             {"code",    rc},
-            {"message", "open_database() failed (file unreadable, locked, or unsupported)"},
+            {"message", "failed to open database (file unreadable, locked, or unsupported)"},
             {"path",    input_path},
         });
-        LOG("open_database() failed: %d", rc);
+        LOG("%s() failed: %d", open_stage, rc);
         return 1;
     }
 

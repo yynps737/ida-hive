@@ -15,22 +15,12 @@
 #include "ida_hive/params.hpp"
 #include "ida_hive/xrefs.hpp"
 
-static bool s_hexrays_available = false;
-static bool s_hexrays_init_tried = false;
-
 namespace ida_hive {
 namespace {
 
 json cmd_decompile(const json &params)
 {
-    if (!s_hexrays_init_tried)
-    {
-        s_hexrays_init_tried = true;
-        s_hexrays_available = init_hexrays_plugin();
-        LOG("Hex-Rays init: %s", s_hexrays_available ? "OK" : "FAILED");
-    }
-
-    if (!s_hexrays_available)
+    if (!hexrays_available())
         throw std::runtime_error("Hex-Rays decompiler not available");
 
     func_t &f = require_func(params);
@@ -262,7 +252,7 @@ json cmd_xrefs_to_field(const json &params)
 json cmd_analyze_batch(const json &params)
 {
     auto addrs = params.at("addresses");
-    bool has_hexrays = init_hexrays_plugin();
+    bool has_hexrays = hexrays_available();
 
     json results = json::array();
     for (auto& addr_val : addrs)

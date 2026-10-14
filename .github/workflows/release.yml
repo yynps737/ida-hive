@@ -15,7 +15,7 @@ permissions:
   contents: write
 
 env:
-  IDA_SDK_TAG: v9.4.0-release
+  IDA_SDK_REF: 05a7724800b9e231b3edabf53c5ad4598973edb2
   RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
 
 jobs:
@@ -39,7 +39,9 @@ jobs:
 
       - name: Clone IDA SDK
         run: |
-          git clone --branch "${IDA_SDK_TAG}" --depth 1 https://github.com/HexRaysSA/ida-sdk.git "${RUNNER_TEMP}/ida-sdk"
+          git init "${RUNNER_TEMP}/ida-sdk"
+          git -C "${RUNNER_TEMP}/ida-sdk" fetch --depth 1 https://github.com/HexRaysSA/ida-sdk.git "${IDA_SDK_REF}"
+          git -C "${RUNNER_TEMP}/ida-sdk" checkout --detach FETCH_HEAD
 
       - name: Build Linux worker
         run: |
@@ -71,7 +73,7 @@ jobs:
           #!/usr/bin/env bash
           set -euo pipefail
           SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-          export LD_LIBRARY_PATH="${IDA_HIVE_IDA_PATH:-/opt/ida-pro-9.4}:${LD_LIBRARY_PATH:-}"
+          export LD_LIBRARY_PATH="${IDA_HIVE_IDA_PATH:-/opt/ida-pro-9.5}:${LD_LIBRARY_PATH:-}"
           export IDA_MCP_WORKER_EXE="${IDA_MCP_WORKER_EXE:-$SCRIPT_DIR/ida_mcp_worker}"
           export IDA_MCP_MAX_SLOTS="${IDA_MCP_MAX_SLOTS:-32}"
           exec "$SCRIPT_DIR/ida-hive"
@@ -106,7 +108,9 @@ jobs:
       - name: Clone IDA SDK
         shell: pwsh
         run: |
-          git clone --branch "$env:IDA_SDK_TAG" --depth 1 https://github.com/HexRaysSA/ida-sdk.git "$env:RUNNER_TEMP\\ida-sdk"
+          git init "$env:RUNNER_TEMP\\ida-sdk"
+          git -C "$env:RUNNER_TEMP\\ida-sdk" fetch --depth 1 https://github.com/HexRaysSA/ida-sdk.git "$env:IDA_SDK_REF"
+          git -C "$env:RUNNER_TEMP\\ida-sdk" checkout --detach FETCH_HEAD
 
       - name: Build Windows worker
         shell: pwsh
@@ -139,7 +143,7 @@ jobs:
           @echo off
           setlocal
           set "SCRIPT_DIR=%~dp0"
-          if not defined IDA_HIVE_IDA_PATH set "IDA_HIVE_IDA_PATH=C:\Program Files\IDA Professional 9.4"
+          if not defined IDA_HIVE_IDA_PATH set "IDA_HIVE_IDA_PATH=C:\Program Files\IDA Professional 9.5"
           set "PATH=%IDA_HIVE_IDA_PATH%;%PATH%"
           if not defined IDA_MCP_WORKER_EXE set "IDA_MCP_WORKER_EXE=%SCRIPT_DIR%ida_mcp_worker.exe"
           if not defined IDA_MCP_MAX_SLOTS set "IDA_MCP_MAX_SLOTS=32"

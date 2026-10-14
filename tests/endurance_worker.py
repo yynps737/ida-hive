@@ -26,25 +26,9 @@ import tempfile
 import time
 from pathlib import Path
 
+from platform_support import default_worker, runtime_env, process_running, rss_kb, fd_count
+
 ROOT = Path(__file__).resolve().parents[1]
-
-
-def rss_kb(pid):
-    """Resident set size in KiB, or None once the process is gone."""
-    try:
-        for line in Path(f"/proc/{pid}/status").read_text().splitlines():
-            if line.startswith("VmRSS:"):
-                return int(line.split()[1])
-    except (FileNotFoundError, ProcessLookupError):
-        return None
-    return None
-
-
-def fd_count(pid):
-    try:
-        return len(list(Path(f"/proc/{pid}/fd").iterdir()))
-    except (FileNotFoundError, PermissionError):
-        return None
 
 
 def die_with_parent():
@@ -64,9 +48,7 @@ def die_with_parent():
 
 class Worker:
     def __init__(self, worker, target, db_dir, ida_path):
-        env = os.environ.copy()
-        if ida_path:
-            env["LD_LIBRARY_PATH"] = f"{ida_path}{os.pathsep}{env.get('LD_LIBRARY_PATH', '')}"
+        env = runtime_env(ida_path)
         self.db_dir = Path(db_dir)
         self.proc = subprocess.Popen(
             [str(worker), str(target), str(db_dir)],
@@ -210,7 +192,7 @@ def test_sigkill_leaves_no_tempdir(worker_path, target, ida_path, failures):
     w.proc.wait(timeout=10)
 
     time.sleep(0.5)
-    still_running = Path(f"/proc/{pid}").exists()
+    still_running = process_running(pid)
     if still_running:
         failures.append("sigkill: worker process survived SIGKILL")
 
@@ -232,7 +214,7 @@ def test_spawn_kill_cycles(worker_path, target, ida_path, rounds, failures):
         pid = w.pid
         w.kill(signal.SIGKILL if i % 2 else signal.SIGTERM)
         time.sleep(0.1)
-        if Path(f"/proc/{pid}").exists():
+        if process_running(pid):
             leaked.append(pid)
         shutil.rmtree(tmp, ignore_errors=True)
     own_fds_end = fd_count(os.getpid())
@@ -251,7 +233,7 @@ def main():
     sys.stdout.reconfigure(line_buffering=True)
 
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--worker", default=str(ROOT / "worker" / "build-linux" / "ida_mcp_worker"))
+    ap.add_argument("--worker", default=str(default_worker()))
     ap.add_argument("--target", default="/usr/bin/grep")
     ap.add_argument("--ida", default=os.environ.get("IDABIN"))
     ap.add_argument("--cycles", type=int, default=30)

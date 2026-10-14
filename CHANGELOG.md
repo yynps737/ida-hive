@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased — IDA 9.5 / macOS ARM64
+
+- Support the 9.5 kernel-owned Hex-Rays dispatcher without falsely reporting an already loaded
+  decompiler as unavailable; keep the 9.4 initialization path and retry after unavailable checks.
+- Add the macOS worker build rpath and retain SDK/runtime paths across CMake regeneration.
+- Default SDK fetching and release builds to public 9.5 commit
+  `05a7724800b9e231b3edabf53c5ad4598973edb2`; CI also compiles against the 9.4 release tag.
+- Run the license-free CI gate on macOS as well as Linux. Add native runtime environment,
+  process, RSS and descriptor probes to the local test harnesses.
+- Make ARM64/Mach-O fixtures meaningful and add a native decompilation regression. Scope the
+  current Clippy exception to rmcp's generated async trait implementation.
+- Fix standalone EOF/`shutdown` error `30500`: initialize raw private databases with the SDK's
+  argv-based `init_database()` API, avoiding the kernel/IDAPython restart caused by passing
+  `-odb` to `open_database()`. Keep normal database closing and isolated temporary files.
+- Add real-worker lifecycle checks for clean EOF/explicit shutdown after decompilation and
+  microcode generation, saved databases, read-only inputs, unusual paths and loader failures.
+- Validated on macOS ARM64 with IDA `9.5.261001.a12ef234`: MCP smoke and batch conversion,
+  42 coordinator tests, 42 functional checks, 2,029 hostile calls, endurance and real-worker
+  concurrency/cleanup and standalone lifecycle checks. Large-binary scale testing was not run.
+
 ## 1.0.4
 
 Two tools answered with something that could not be true. Both were found by asking a

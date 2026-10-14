@@ -21,6 +21,18 @@ using json = nlohmann::json;
 
 
 namespace ida_hive {
+inline bool hexrays_available()
+{
+#if IDA_SDK_VERSION >= 950
+    // 9.5 keeps the dispatcher in the kernel. An already loaded decompiler can
+    // work even when the legacy UI broadcast returns false under idalib. This
+    // follows the SDK's own py_init_hexrays_plugin implementation.
+    if (get_hexdsp() != nullptr)
+        return true;
+#endif
+    return init_hexrays_plugin();
+}
+
 // Required address, accepting a hex string, an integer, or a symbol name.
 inline ea_t require_ea(const json &params, const char *key = "ea")
 {
@@ -70,7 +82,7 @@ inline size_t opt_size(const json &params, const char *key, size_t dflt)
 // before touching a cfunc_t.
 inline cfuncptr_t require_decompiled(func_t &f)
 {
-    if (!init_hexrays_plugin())
+    if (!hexrays_available())
         throw std::runtime_error("Hex-Rays decompiler is not available");
 
     hexrays_failure_t hf;

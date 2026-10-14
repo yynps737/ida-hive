@@ -31,6 +31,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from platform_support import default_worker, has_runtime, process_pids, runtime_env
+
 ROOT = Path(__file__).resolve().parents[1]
 
 # Real analysis is slow; these bound the wait rather than describe it.
@@ -39,7 +41,7 @@ CALL_TIMEOUT = 120
 
 
 def small_binaries(count):
-    """Distinct, genuinely small ELF files, so analysis stays in seconds."""
+    """Distinct small native binaries, so analysis stays in seconds."""
     found = []
     for d in ("/usr/bin", "/bin"):
         p = Path(d)
@@ -63,11 +65,9 @@ class Client:
     """Minimal MCP stdio client, with replies matched by request id."""
 
     def __init__(self, server, worker, ida_path, **env_overrides):
-        env = os.environ.copy()
+        env = runtime_env(ida_path)
         env["IDA_MCP_WORKER_EXE"] = str(worker)
         env.setdefault("RUST_LOG", "warn")
-        if ida_path:
-            env["LD_LIBRARY_PATH"] = f"{ida_path}{os.pathsep}{env.get('LD_LIBRARY_PATH', '')}"
         for k, v in env_overrides.items():
             env[k] = str(v)
 
@@ -152,24 +152,7 @@ def worker_pids(parent_pid=None, worker_name="ida_mcp_worker"):
     Matching on the name alone would also count workers left by other phases of a
     test run, so a parent is required whenever the answer is asserted on.
     """
-    pids = []
-    for entry in Path("/proc").iterdir():
-        if not entry.name.isdigit():
-            continue
-        try:
-            cmdline = (entry / "cmdline").read_bytes()
-            if worker_name.encode() not in cmdline:
-                continue
-            if parent_pid is not None:
-                status = (entry / "status").read_text()
-                ppid = next(int(l.split()[1]) for l in status.splitlines()
-                            if l.startswith("PPid:"))
-                if ppid != parent_pid:
-                    continue
-        except (OSError, StopIteration):
-            continue
-        pids.append(int(entry.name))
-    return pids
+    return process_pids(worker_name, parent_pid)
 
 
 def err(reply):
@@ -375,7 +358,7 @@ def main():
 
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--server", default=str(ROOT / "target" / "release" / "ida-hive"))
-    ap.add_argument("--worker", default=str(ROOT / "worker" / "build-linux" / "ida_mcp_worker"))
+    ap.add_argument("--worker", default=str(default_worker()))
     ap.add_argument("--ida", default=os.environ.get("IDABIN"))
     args = ap.parse_args()
 
@@ -383,13 +366,13 @@ def main():
         if not Path(path).exists():
             print(f"SKIPPED: {name} not built at {path}")
             return 0
-    if not args.ida or not (Path(args.ida) / "libidalib.so").exists():
+    if not has_runtime(args.ida):
         print("SKIPPED: IDABIN does not point at an IDA installation")
         return 0
 
     binaries = small_binaries(4)
     if len(binaries) < 3:
-        print("SKIPPED: not enough small ELF binaries to drive the test")
+        print("SKIPPED: not enough small native binaries to drive the test")
         return 0
 
     failures = []

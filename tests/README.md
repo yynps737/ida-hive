@@ -9,16 +9,17 @@ an activated IDA Pro license.
 | Layer | How | Coverage |
 |-------|-----|----------|
 | Rust coordinator | `tests/test_coordinator.py` drives the **real** `ida-hive` binary over real MCP stdio, with `tests/mock_worker.py` standing in for the C++ worker | MCP surface, session routing, path dedup, refcounted teardown, concurrency, timeouts, crash recovery, temp-dir lifecycle, batch_convert |
-| C++ worker build | `scripts/build_check.sh` compiles **and links** `worker/` against the real public IDA 9.4 SDK via the repo's own `worker/CMakeLists.txt` | The C++ uses the IDA 9.4 API correctly (signatures, types, headers); the documented build path works |
-| Worker startup | `build_check.sh` runs the linked worker up to `idalib init_library()` | The binary is well-formed right up to the license gate |
+| C++ worker build | `scripts/build_check.sh` compiles **and links** `worker/` against the selected public IDA 9.4/9.5 SDK via `worker/CMakeLists.txt` | API signatures, types and headers compile; the documented build path works |
 
 `scripts/build_check.sh` runs all of the above in one shot and clones the public
-SDK automatically if `IDASDK` is unset. Nothing in the test tree needs or
+SDK automatically if `IDASDK` is unset (`SDK_REF` defaults to the pinned 9.5 commit).
+Real-worker startup and analysis checks skip without `IDABIN` pointing at an installation.
+Nothing in the test tree needs or
 touches a license file.
 
 ## What CANNOT be tested without a license
 
-The actual analysis behaviour of the 64 worker tools (`decompile`, `disasm`,
+The actual analysis behaviour of the worker tools (`decompile`, `disasm`,
 `xrefs`, types, …) and the README's performance numbers. All of it runs inside
 `idalib`, which refuses to initialize without activation — the worker emits a
 clean `init_error` and never opens a database. `mock_worker.py` exists precisely
@@ -33,8 +34,9 @@ an activated machine: `python tests/live/test_smoke.py /path/to/binary`.
 | Path | License needed | Purpose |
 |------|----------------|---------|
 | `tests/test_coordinator.py`, `tests/mock_worker.py` | no | coordinator suite over real MCP stdio |
-| `scripts/build_check.sh` | no | C++ worker compile + link + startup |
+| `scripts/build_check.sh` | no for builds/mock tests; **yes** for real-worker checks | full gate, reporting skipped steps |
 | `tests/live/` | **yes** | real-tool validation; also shipped at the top level of the release tarball |
+| `tests/worker_lifecycle.py` | **yes** | real EOF/shutdown exit codes, decompiler cleanup, private files and failed opens |
 
 ## The mock worker
 
@@ -60,7 +62,22 @@ python3 tests/test_coordinator.py -k dedup   # filter
 python3 tests/test_coordinator.py -v         # tracebacks
 scripts/build_check.sh                          # everything license-free
 SKIP_WORKER=1 scripts/build_check.sh            # coordinator only, no SDK/C++ build
+SDK_REF=v9.4.0-release scripts/build_check.sh   # select the previous SDK
+IDASDK=/path/to/sdk/src IDABIN="/Applications/IDA Professional 9.5.app/Contents/MacOS" scripts/build_check.sh
 ```
+
+The Linux/macOS harnesses share runtime-path and process/resource probes in
+`platform_support.py`. Functional fixtures use the target's stack register, a real pointer
+for offset round-trips, and ELF or Mach-O uninitialized-data segments. A compiled-addition
+regression exercises native decompilation, including the 9.5 kernel dispatcher path.
+Checks that require x86-64 disassembly explicitly print `vacuous` on ARM64.
+
+`worker_lifecycle.py` is part of the gate's native startup step. It leaves stdin open for explicit
+`shutdown` cases and closes it for EOF cases, waits for the actual exit code, and captures stderr.
+Raw inputs live in a read-only directory with spaces/Unicode (and a backslash on Unix), beside a
+guarded `.i64` sentinel. The test checks private database files while the worker is alive and
+their cleanup after closing. Saved databases are opened as copies and their original hash must
+stay unchanged. Loader failures must still emit `init_error` and exit with a nonzero status.
 
 Known product bugs are asserted as `xfail` tests: they pass while the bug
 exists (documenting it) and fail loudly the day it is fixed. A green run lists

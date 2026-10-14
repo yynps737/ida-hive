@@ -35,7 +35,7 @@ json cmd_analyze_function(const json &params)
     size_t fsize = (size_t)(f.end_ea - f.start_ea);
 
     std::string pseudocode;
-    if (init_hexrays_plugin())
+    if (hexrays_available())
     {
         hexrays_failure_t hf;
         cfuncptr_t cfunc = decompile(&f, &hf);
@@ -305,7 +305,7 @@ json cmd_diff_before_after(const json &params)
     if (!f)
         throw std::runtime_error("No function containing address");
 
-    if (!init_hexrays_plugin())
+    if (!hexrays_available())
         throw std::runtime_error("Hex-Rays required for diff");
 
     auto decompile_to_string = [](func_t* f) -> std::string {

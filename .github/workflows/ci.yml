@@ -20,7 +20,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   # The worker builds against the public SDK; only running IDA needs a license.
-  IDA_SDK_TAG: v9.4.0-release
+  IDA_SDK_REF: 05a7724800b9e231b3edabf53c5ad4598973edb2
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -57,8 +57,17 @@ jobs:
         run: cargo clippy --release --all-targets --locked
 
   worker:
-    name: C++ worker against the IDA 9.4 SDK
+    name: C++ worker against IDA ${{ matrix.sdk.version }} SDK
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        sdk:
+          - version: '9.4'
+            ref: v9.4.0-release
+          - version: '9.5'
+            ref: 05a7724800b9e231b3edabf53c5ad4598973edb2
+    env:
+      IDA_SDK_REF: ${{ matrix.sdk.ref }}
     steps:
       - uses: actions/checkout@v4
 
@@ -69,8 +78,9 @@ jobs:
 
       - name: Clone the public IDA SDK
         run: |
-          git clone --branch "${IDA_SDK_TAG}" --depth 1 \
-            https://github.com/HexRaysSA/ida-sdk.git "${RUNNER_TEMP}/ida-sdk"
+          git init "${RUNNER_TEMP}/ida-sdk"
+          git -C "${RUNNER_TEMP}/ida-sdk" fetch --depth 1 https://github.com/HexRaysSA/ida-sdk.git "${IDA_SDK_REF}"
+          git -C "${RUNNER_TEMP}/ida-sdk" checkout --detach FETCH_HEAD
 
       # The SDK's lib/ holds link-time stubs: enough to compile and link, not enough
       # to run. That is exactly the coverage this job is for.
@@ -88,7 +98,7 @@ jobs:
       - name: Upload worker
         uses: actions/upload-artifact@v4
         with:
-          name: worker-linux
+          name: worker-linux-${{ matrix.sdk.version }}
           path: worker/build-linux/ida_mcp_worker
           retention-days: 7
 
@@ -101,8 +111,9 @@ jobs:
       - name: Clone the public IDA SDK
         shell: pwsh
         run: |
-          git clone --branch "$env:IDA_SDK_TAG" --depth 1 `
-            https://github.com/HexRaysSA/ida-sdk.git "$env:RUNNER_TEMP\ida-sdk"
+          git init "$env:RUNNER_TEMP\ida-sdk"
+          git -C "$env:RUNNER_TEMP\ida-sdk" fetch --depth 1 https://github.com/HexRaysSA/ida-sdk.git "$env:IDA_SDK_REF"
+          git -C "$env:RUNNER_TEMP\ida-sdk" checkout --detach FETCH_HEAD
 
       # Windows is where the build differs most: MSVC is a multi-config generator,
       # so the binary lands under a per-configuration directory, and the import
@@ -185,7 +196,10 @@ jobs:
 
   gate:
     name: Full gate (license-free steps)
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     needs: [rust, worker, worker-windows, rust-windows, coordinator]
     steps:
       - uses: actions/checkout@v4
@@ -200,6 +214,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install build dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build

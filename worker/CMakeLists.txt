@@ -20,6 +20,9 @@ if(NOT EXISTS "${_idasdk_init}")
         "IDA SDK 9.4 or newer is required; 9.2/9.3 shipped bootstrap.cmake instead.")
 endif()
 include("${_idasdk_init}")
+# Preserve the resolved SDK when Ninja regenerates without the configure-time
+# environment (for example, after editing this file).
+set(IDASDK "$ENV{IDASDK}" CACHE PATH "IDA SDK include/cmake root" FORCE)
 
 project(ida_mcp_worker VERSION 1.0.4)
 
@@ -30,6 +33,7 @@ project(ida_mcp_worker VERSION 1.0.4)
 set(CMAKE_CXX_STANDARD 17)
 
 find_package(idasdk REQUIRED)
+set(IDABIN "${IDABIN}" CACHE PATH "IDA runtime directory" FORCE)
 
 ida_add_idalib(ida_mcp_worker
     TYPE EXECUTABLE
@@ -74,6 +78,16 @@ endif()
 # worker into the IDA installation. Keep it in the build tree instead.
 set_target_properties(ida_mcp_worker PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+
+# macOS SDK link stubs use @rpath install names. Unlike Linux's .so imports,
+# linking a .tbd does not make CMake add the runtime directory automatically.
+# Use the selected installation for local builds; packaged workers can use the
+# wrapper's DYLD_LIBRARY_PATH and an installation beside the executable.
+if(APPLE)
+    set_target_properties(ida_mcp_worker PROPERTIES
+        BUILD_RPATH "${IDABIN}"
+        INSTALL_RPATH "@executable_path")
+endif()
 
 # Multi-config generators append the configuration to the output directory, so the
 # path differs between MSVC and a single-config build. Packaging must not guess at

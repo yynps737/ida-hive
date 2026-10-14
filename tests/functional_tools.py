@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Correctness pass over the IDA 9.4 tools, against a real database.
+"""Correctness pass over the IDA 9.4/9.5 tools, against a real database.
 
 The adversarial suite proves these tools survive bad input; it says nothing about
 whether the data they return is right. A handler that quietly returns an empty list,
@@ -28,6 +28,8 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+
+from platform_support import default_worker, has_runtime, runtime_env
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -59,9 +61,7 @@ def die_with_parent():
 class Worker:
     def __init__(self, worker, target, db_dir, ida_path):
         self.worker, self.ida_path = worker, ida_path
-        env = os.environ.copy()
-        if ida_path:
-            env["LD_LIBRARY_PATH"] = f"{ida_path}{os.pathsep}{env.get('LD_LIBRARY_PATH', '')}"
+        env = runtime_env(ida_path)
         self.proc = subprocess.Popen(
             [str(worker), str(target), str(db_dir)],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
@@ -312,7 +312,9 @@ def _(w):
 @check("reg_value: status and value stay consistent")
 def _(w):
     f = w("list_funcs", limit=1)["functions"][0]
-    r = w("reg_value", ea=f["ea"], reg="rsp")
+    info = w("get_info")
+    reg = "SP" if info["processor"].lower() == "arm" else "rsp" if info["bits"] == 64 else "esp"
+    r = w("reg_value", ea=f["ea"], reg=reg)
     assert_(r["status"] in ("constant", "not_constant", "failed"), f"bad status {r['status']}")
     assert_(r["resolved"] == (r["status"] == "constant"),
             "resolved disagrees with status")
@@ -342,6 +344,23 @@ def _(w):
 
 
 # ---- Microcode ----
+
+@check("decompile: a compiled addition is available through the native API")
+def _(w):
+    built = _build_sample(w, "int add_values(int a, int b) { return a + b; }\n"
+                             "int main(int argc, char **argv) { return add_values(argc, 7); }\n")
+    if isinstance(built, str):
+        return built
+    d, tmp = built
+    try:
+        add = d("decompile", ea="add_values")["pseudocode"]
+        main = d("decompile", ea="main")["pseudocode"]
+        assert_(re.search(r"return[^;]*\+", add), f"addition missing from pseudocode: {add}")
+        assert_("add_values" in main and "7" in main, f"call missing from pseudocode: {main}")
+        return "addition and main's call both decompiled"
+    finally:
+        d.close()
+        shutil.rmtree(tmp, ignore_errors=True)
 
 @check("microcode: optimization removes instructions rather than adding them")
 def _(w):
@@ -457,20 +476,28 @@ def _(w):
 
 @check("offset: mark, read back, clear")
 def _(w):
-    cands = w("offset_candidates", start=w("get_info")["min_ea"], limit=5)["candidates"]
-    if not cands:
-        return "no offset candidates (vacuous)"
-    ea = cands[0]["ea"]
-
-    w("set_offset", ea=ea, type="off64")
-    marked = w("get_offset", ea=ea)
-    assert_(marked["is_offset"], "the operand was not marked")
-    assert_(marked["type"] == "off64", f"type came back as {marked['type']}")
-
-    w("clear_offset", ea=ea)
-    cleared = w("get_offset", ea=ea)
-    assert_(not cleared["is_offset"], "the marking survived clear_offset")
-    return f"round-trip at {ea}"
+    # A candidate in a Mach-O header may be a 32-bit item. Use an actual pointer
+    # object so the requested width is valid on both ELF and Mach-O.
+    built = _build_sample(w, "int offset_value = 7; int *offset_pointer = &offset_value;\n"
+                             "int main(void) { return *offset_pointer; }\n")
+    if isinstance(built, str):
+        return built
+    d, tmp = built
+    try:
+        ea = next(g["ea"] for g in d("list_globals", limit=400)["globals"]
+                  if g["name"] == "offset_pointer")
+        kind = "off64" if d("get_info")["bits"] == 64 else "off32"
+        d("clear_offset", ea=ea)
+        d("set_offset", ea=ea, type=kind)
+        marked = d("get_offset", ea=ea)
+        assert_(marked["is_offset"], "the operand was not marked")
+        assert_(marked["type"] == kind, f"type came back as {marked['type']}")
+        d("clear_offset", ea=ea)
+        assert_(not d("get_offset", ea=ea)["is_offset"], "the marking survived clear_offset")
+        return f"round-trip at {ea}"
+    finally:
+        d.close()
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 @check("get_offset: an operand resolves to its own target, not to the base")
@@ -589,8 +616,9 @@ def _(w):
         return built
     d, tmp = built
     try:
-        bss = [x for x in d("list_segments")["segments"] if x.get("name") == ".bss"]
-        assert_(bss, "the sample has no .bss")
+        bss = [x for x in d("list_segments")["segments"]
+               if x.get("name") in (".bss", "__bss", "__common")]
+        assert_(bss, "the sample has no uninitialized-data segment")
         start = bss[0]["start"]
 
         raw = d("get_bytes", ea=start, size=32)
@@ -1063,7 +1091,7 @@ def main():
     sys.stdout.reconfigure(line_buffering=True)
 
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--worker", default=str(ROOT / "worker" / "build-linux" / "ida_mcp_worker"))
+    ap.add_argument("--worker", default=str(default_worker()))
     ap.add_argument("--target", default="/usr/bin/grep")
     ap.add_argument("--ida", default=os.environ.get("IDABIN"))
     args = ap.parse_args()
@@ -1071,7 +1099,7 @@ def main():
     if not Path(args.worker).exists():
         print(f"SKIPPED: worker not built at {args.worker}")
         return 0
-    if not args.ida or not (Path(args.ida) / "libidalib.so").exists():
+    if not has_runtime(args.ida):
         print("SKIPPED: IDABIN does not point at an IDA installation")
         return 0
 

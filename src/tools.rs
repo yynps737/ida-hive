@@ -1644,6 +1644,9 @@ impl IdaMcpServer {
     }
 }
 
+// rmcp generates an async trait method with no await; its signature belongs to
+// the macro, not this implementation. Keep the exception scoped to that impl.
+#[allow(clippy::unused_async_trait_impl)]
 #[tool_handler]
 impl ServerHandler for IdaMcpServer {
     fn get_info(&self) -> ServerInfo {

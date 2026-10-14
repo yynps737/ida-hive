@@ -70,7 +70,7 @@ private:
 
 mba_t *generate(func_t &f, mba_maturity_t level)
 {
-    if (!init_hexrays_plugin())
+    if (!hexrays_available())
         throw std::runtime_error("Hex-Rays decompiler is not available");
 
     hexrays_failure_t hf;

@@ -24,6 +24,8 @@ import tempfile
 import time
 from pathlib import Path
 
+from platform_support import default_worker, runtime_env
+
 ROOT = Path(__file__).resolve().parents[1]
 
 # Destructive or flow-control commands are exercised, but not with arguments that
@@ -102,9 +104,7 @@ class Worker:
     """One worker process, spoken to over its JSON Lines protocol."""
 
     def __init__(self, worker, target, db_dir, ida_path):
-        env = os.environ.copy()
-        if ida_path:
-            env["LD_LIBRARY_PATH"] = f"{ida_path}{os.pathsep}{env.get('LD_LIBRARY_PATH', '')}"
+        env = runtime_env(ida_path)
         self.proc = subprocess.Popen(
             [str(worker), str(target), str(db_dir)],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
@@ -281,7 +281,7 @@ def main():
     sys.stdout.reconfigure(line_buffering=True)
 
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--worker", default=str(ROOT / "worker" / "build-linux" / "ida_mcp_worker"))
+    ap.add_argument("--worker", default=str(default_worker()))
     ap.add_argument("--target", default="/usr/bin/grep")
     ap.add_argument("--ida", default=os.environ.get("IDABIN"))
     args = ap.parse_args()

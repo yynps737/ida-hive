@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# Runs every check that needs no IDA license: the Rust build, the C++ worker build
-# and link against the real SDK, the worker reaching idalib's license gate, and the
-# coordinator suite. Tool behaviour stays unverified, since idalib will not
-# initialize without activation. The public SDK is cloned when $IDASDK is unset.
+# Builds against the selected SDK, then runs mock and real-IDA checks. Real checks
+# are skipped without a runnable IDA installation. The public SDK is fetched when
+# $IDASDK is unset; SDK_REF selects 9.4 or the pinned 9.5 beta SDK.
 #
 # Usage:
 #   scripts/build_check.sh                 # full run, cloning the SDK if needed
@@ -15,9 +14,20 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-SDK_TAG="v9.4.0-release"
-SDK_CACHE="${SDK_CACHE:-$ROOT/worker/.ida-sdk-cache}"
-BUILD_DIR="${BUILD_DIR:-$ROOT/worker/build-linux}"
+SDK_REF="${SDK_REF:-05a7724800b9e231b3edabf53c5ad4598973edb2}"
+SDK_CACHE="${SDK_CACHE:-$ROOT/worker/.ida-sdk-cache/$SDK_REF}"
+if [ "$(uname -s)" = "Darwin" ]; then
+    default_build_dir="$ROOT/worker/build-macos"
+    sdk_platform=mac
+else
+    default_build_dir="$ROOT/worker/build-linux"
+    sdk_platform=linux
+fi
+BUILD_DIR="${BUILD_DIR:-$default_build_dir}"
+JOBS="${CMAKE_BUILD_PARALLEL_LEVEL:-$(python3 -c 'import os; print(os.cpu_count() or 1)')}"
+TEST_BINARY="${IDA_HIVE_TEST_BINARY:-/usr/bin/grep}"
+IDABIN="${IDABIN:-}"
+WORKER=""
 
 pass=0; fail=0; skip=0
 declare -a skipped=()
@@ -44,14 +54,15 @@ else
 fi
 
 if [ "${SKIP_WORKER:-0}" != "1" ]; then
-    step "3/10  C++ worker build against the real IDA 9.4 SDK"
+    step "3/10  C++ worker build against the selected IDA 9.4/9.5 SDK"
 
     if [ -z "${IDASDK:-}" ]; then
         if [ ! -f "$SDK_CACHE/src/include/ida.hpp" ]; then
-            echo "  cloning public IDA SDK $SDK_TAG..."
-            rm -rf "$SDK_CACHE"
-            if git clone --branch "$SDK_TAG" --depth 1 \
-                 https://github.com/HexRaysSA/ida-sdk.git "$SDK_CACHE" >/tmp/ida_hive_sdk.log 2>&1; then
+            echo "  fetching public IDA SDK $SDK_REF..."
+            if git init "$SDK_CACHE" >/tmp/ida_hive_sdk.log 2>&1 \
+               && git -C "$SDK_CACHE" fetch --depth 1 \
+                    https://github.com/HexRaysSA/ida-sdk.git "$SDK_REF" >>/tmp/ida_hive_sdk.log 2>&1 \
+               && git -C "$SDK_CACHE" checkout --detach FETCH_HEAD >>/tmp/ida_hive_sdk.log 2>&1; then
                 echo "  SDK ready at $SDK_CACHE"
             else
                 bad "SDK clone failed — see /tmp/ida_hive_sdk.log"; tail -15 /tmp/ida_hive_sdk.log
@@ -59,13 +70,18 @@ if [ "${SKIP_WORKER:-0}" != "1" ]; then
         fi
         export IDASDK="$SDK_CACHE/src"
     fi
-    # The SDK ships Linux link stubs here; no IDA install needed just to link.
-    export IDABIN="${IDABIN:-$IDASDK/lib/x64_linux_64}"
+    # SDK link stubs are sufficient to build. A real installation is supplied
+    # explicitly through IDABIN for the runtime checks below.
+    sdk_source="$IDASDK"
+    if [ -f "$IDASDK/src/include/pro.h" ]; then sdk_source="$IDASDK/src"; fi
+    case "$(uname -m)" in arm64|aarch64) sdk_arch=arm64 ;; *) sdk_arch=x64 ;; esac
+    export IDABIN="${IDABIN:-$sdk_source/lib/${sdk_arch}_${sdk_platform}_64}"
 
     # IDASDK may name the repo root or its src/ subdirectory; both are valid.
     if [ -f "$IDASDK/cmake/idasdk_init.cmake" ] || [ -f "$IDASDK/src/cmake/idasdk_init.cmake" ]; then
-        if cmake -S worker -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release >/tmp/ida_hive_cmake.log 2>&1 \
-           && cmake --build "$BUILD_DIR" -j"$(nproc)" >>/tmp/ida_hive_cmake.log 2>&1; then
+        if cmake -S worker -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release \
+                 -DIDASDK="$IDASDK" -DIDABIN="$IDABIN" >/tmp/ida_hive_cmake.log 2>&1 \
+           && cmake --build "$BUILD_DIR" --parallel "$JOBS" >>/tmp/ida_hive_cmake.log 2>&1; then
             ok "worker compiled + linked via worker/CMakeLists.txt"
         else
             bad "worker build failed — see /tmp/ida_hive_cmake.log"; tail -25 /tmp/ida_hive_cmake.log
@@ -74,8 +90,8 @@ if [ "${SKIP_WORKER:-0}" != "1" ]; then
         bad "IDASDK=$IDASDK has no cmake/idasdk_init.cmake (SDK older than 9.4?)"
     fi
 
-    step "4/10  Worker starts against a real IDA install"
-    WORKER="$(find "$BUILD_DIR" -name ida_mcp_worker -type f 2>/dev/null | head -1)"
+    step "4/10  Native worker lifecycle and MCP smoke"
+    if [ -f "$BUILD_DIR/worker-path.txt" ]; then WORKER="$(cat "$BUILD_DIR/worker-path.txt")"; fi
     if [ -z "$WORKER" ]; then
         bad "no ida_mcp_worker binary produced"
     # The SDK's lib/ holds link-time stubs only: they satisfy the linker but
@@ -83,18 +99,24 @@ if [ "${SKIP_WORKER:-0}" != "1" ]; then
     elif [ ! -x "$IDABIN/idat" ] && [ ! -x "$IDABIN/ida" ]; then
         skipped "IDABIN holds SDK link stubs, not a runnable IDA"
     else
-        # stdout carries the protocol; the [worker] log lines go to stderr.
-        OUT="$(echo '{"id":1,"method":"ping","params":{}}' \
-               | LD_LIBRARY_PATH="$IDABIN" timeout 60 "$WORKER" /bin/ls /tmp 2>/dev/null | head -1)"
-        if echo "$OUT" | grep -qE '"event":"(ready|init_error)"'; then
-            ok "worker started and reported its state cleanly"
-            echo "       $(echo "$OUT" | cut -c1-100)"
+        if IDABIN="$IDABIN" python3 tests/worker_lifecycle.py \
+             --worker "$WORKER" >/tmp/ida_hive_lifecycle.log 2>&1 \
+           && IDA_MCP_OPEN_TIMEOUT=60 python3 tests/live/test_smoke.py "$TEST_BINARY" \
+             --worker "$WORKER" --ida-path "$IDABIN" --skip-batch --skip-decompile \
+             >/tmp/ida_hive_startup.log 2>&1; then
+            ok "clean EOF/shutdown, loader failures, private files and MCP startup"
+            tail -1 /tmp/ida_hive_lifecycle.log
         else
-            bad "unexpected worker startup output: ${OUT:-<empty>}"
+            bad "native lifecycle/startup failed — see /tmp/ida_hive_lifecycle.log and /tmp/ida_hive_startup.log"
+            tail -15 /tmp/ida_hive_lifecycle.log
+            tail -15 /tmp/ida_hive_startup.log
         fi
     fi
 else
-    step "4-5/10  C++ worker  (SKIPPED: SKIP_WORKER=1)"
+    step "3/10  C++ worker build"
+    skipped "SKIP_WORKER=1"
+    step "4/10  Native worker startup"
+    skipped "SKIP_WORKER=1"
 fi
 
 step "5/10  Coordinator end-to-end suite (mock idalib worker)"
@@ -109,10 +131,9 @@ else
 fi
 
 step "6/10  Worker adversarial stress (hostile input, protocol abuse, pipelining)"
-WORKER="$(find "$BUILD_DIR" -name ida_mcp_worker -type f 2>/dev/null | head -1)"
 if [ -z "$WORKER" ] || { [ ! -x "$IDABIN/idat" ] && [ ! -x "$IDABIN/ida" ]; }; then
     skipped "needs a built worker and a runnable IDA"
-elif IDABIN="$IDABIN" python3 tests/stress_worker.py --worker "$WORKER" >/tmp/ida_hive_stress.log 2>&1; then
+elif IDABIN="$IDABIN" python3 tests/stress_worker.py --worker "$WORKER" --target "$TEST_BINARY" >/tmp/ida_hive_stress.log 2>&1; then
     ok "$(tail -1 /tmp/ida_hive_stress.log)"
 else
     bad "stress test failed — see /tmp/ida_hive_stress.log"; tail -15 /tmp/ida_hive_stress.log
@@ -121,17 +142,17 @@ fi
 step "7/10  Worker endurance (memory, descriptors, kill cleanup)"
 if [ -z "$WORKER" ] || { [ ! -x "$IDABIN/idat" ] && [ ! -x "$IDABIN/ida" ]; }; then
     skipped "needs a built worker and a runnable IDA"
-elif IDABIN="$IDABIN" python3 tests/endurance_worker.py --worker "$WORKER" >/tmp/ida_hive_endur.log 2>&1; then
+elif IDABIN="$IDABIN" python3 tests/endurance_worker.py --worker "$WORKER" --target "$TEST_BINARY" >/tmp/ida_hive_endur.log 2>&1; then
     ok "$(tail -1 /tmp/ida_hive_endur.log)"
     grep -E "^  (memory|fds|cycles):" /tmp/ida_hive_endur.log | sed 's/^/     /'
 else
     bad "endurance test failed — see /tmp/ida_hive_endur.log"; tail -15 /tmp/ida_hive_endur.log
 fi
 
-step "8/10  Tool correctness (invariants over the 9.4 tools)"
+step "8/10  Tool correctness (IDA 9.4/9.5)"
 if [ -z "$WORKER" ] || { [ ! -x "$IDABIN/idat" ] && [ ! -x "$IDABIN/ida" ]; }; then
     skipped "needs a built worker and a runnable IDA"
-elif IDABIN="$IDABIN" python3 tests/functional_tools.py --worker "$WORKER" >/tmp/ida_hive_func.log 2>&1; then
+elif IDABIN="$IDABIN" python3 tests/functional_tools.py --worker "$WORKER" --target "$TEST_BINARY" >/tmp/ida_hive_func.log 2>&1; then
     ok "$(tail -1 /tmp/ida_hive_func.log)"
 else
     bad "tool correctness failed — see /tmp/ida_hive_func.log"

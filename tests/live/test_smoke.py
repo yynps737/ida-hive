@@ -48,6 +48,11 @@ def default_worker():
             ROOT / "worker" / "build" / "Release" / "ida_mcp_worker.exe",
             ROOT / "worker" / "build" / "ida_mcp_worker.exe",
         ])
+    if platform.system() == "Darwin":
+        return pick_existing([
+            ROOT / "worker" / "build-macos" / "ida_mcp_worker",
+            ROOT / "worker" / "build" / "ida_mcp_worker",
+        ])
     return pick_existing([
         ROOT / "worker" / "build-linux" / "ida_mcp_worker",
         ROOT / "worker" / "build" / "ida_mcp_worker",
@@ -59,6 +64,8 @@ def prepend_runtime_path(env, ida_path):
         return
     if platform.system() == "Windows":
         env["PATH"] = f"{ida_path}{os.pathsep}{env.get('PATH', '')}"
+    elif platform.system() == "Darwin":
+        env["DYLD_LIBRARY_PATH"] = f"{ida_path}{os.pathsep}{env.get('DYLD_LIBRARY_PATH', '')}"
     else:
         env["LD_LIBRARY_PATH"] = f"{ida_path}{os.pathsep}{env.get('LD_LIBRARY_PATH', '')}"
 
@@ -71,7 +78,7 @@ def parse_args():
     parser.add_argument(
         "--ida-path",
         default=os.environ.get("IDA_HIVE_IDA_PATH"),
-        help="IDA install directory to prepend to PATH on Windows or LD_LIBRARY_PATH on Linux",
+        help="IDA runtime directory (PATH on Windows, DYLD_LIBRARY_PATH on macOS, LD_LIBRARY_PATH on Linux)",
     )
     parser.add_argument("--timeout", type=int, default=60, help="Analysis timeout in seconds for raw binaries")
     parser.add_argument("--session", default="smoke", help="Session identifier")

@@ -158,7 +158,7 @@ json cmd_delete_stack(const json &params)
     std::string vname = params.at("name").get<std::string>();
 
     func_t &f = require_func(params);
-    if (!init_hexrays_plugin())
+    if (!hexrays_available())
         throw std::runtime_error("Hex-Rays decompiler is not available");
 
     // An empty name restores IDA's generated default.

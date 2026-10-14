@@ -174,22 +174,13 @@ class McpClient:
 def make_bin(dirpath, name, size=256):
     p = Path(dirpath) / name
     p.write_bytes(b"\x7fELF" + os.urandom(size))
-    return p
+    return p.resolve()
 
 
 def mock_worker_pids():
     """PIDs of live mock workers — used to prove process cleanup."""
-    pids = []
-    for entry in Path("/proc").iterdir():
-        if not entry.name.isdigit():
-            continue
-        try:
-            cmdline = (entry / "cmdline").read_bytes()
-        except OSError:
-            continue
-        if b"mock_worker.py" in cmdline:
-            pids.append(int(entry.name))
-    return pids
+    from platform_support import process_pids
+    return process_pids("mock_worker.py")
 
 
 def wait_until(predicate, timeout=5.0, interval=0.05):
