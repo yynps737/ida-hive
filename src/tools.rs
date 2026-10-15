@@ -550,7 +550,7 @@ pub struct BatchConvertReq {
     #[schemars(description = "Array of raw binary paths to convert (validated on PE and ELF)")]
     pub paths: Vec<String>,
     #[serde(default)]
-    #[schemars(description = "Output directory for .i64 files. If omitted, saves next to original (input.bin -> input.bin.i64)")]
+    #[schemars(description = "Output directory for .i64 files. If omitted, saves next to original (input.bin -> input.bin.i64). Duplicate destinations and existing files are rejected; outputs are never overwritten. Requires a filesystem with hard-link support.")]
     pub output_dir: Option<String>,
     #[serde(default)]
     #[schemars(description = "Max parallel workers (default 5, max limited by server max_slots)")]
@@ -1324,10 +1324,6 @@ impl IdaMcpServer {
         // Clamped to 50 first, so usize holds it on every target width.
         let concurrency = usize::try_from(concurrency.unwrap_or(5).clamp(1, 50)).unwrap_or(5);
         let max_secs = max_analysis_seconds.unwrap_or(600).clamp(30, 3600);
-
-        if let Some(ref dir) = output_dir {
-            let _ = std::fs::create_dir_all(dir);
-        }
 
         let total = paths.len();
         let results = self.coordinator.batch_convert(paths, output_dir, concurrency, max_secs).await;

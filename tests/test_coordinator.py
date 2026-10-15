@@ -640,6 +640,66 @@ def test_concurrent_open_of_same_path_dedups():
 # ---- 4b. Stress & lifecycle edges ----
 
 @test
+def test_same_session_parallel_open_is_atomic():
+    """A session cannot publish two workers, even for different input paths."""
+    with tempfile.TemporaryDirectory() as td, McpClient(IDA_MCP_MAX_SLOTS=4) as c:
+        first, second = [make_bin(td, name) for name in ("gated-first.bin", "gated-second.bin")]
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            a = pool.submit(c.call, "open_file", path=str(first), session="same")
+            check(wait_until(lambda: Path(str(first) + ".starting").exists()), "first worker never started")
+            b = pool.submit(c.call, "open_file", path=str(second), session="same")
+            time.sleep(0.1)
+            for path in (first, second):
+                Path(str(path) + ".release").touch()
+            opened, rejected = a.result(timeout=10), b.result(timeout=10)
+        check(not err_of(opened), f"first open failed: {opened}")
+        check("different binary" in (err_of(rejected) or ""), f"conflicting open succeeded: {rejected}")
+        check(c.call("get_info", session="same")["path"] == str(first), "session was remapped")
+        check(len(c.call("list_instances")) == 1, "conflicting open leaked a worker")
+        c.call("close_session", session="same")
+        check(c.call("list_instances") == [], "worker survived the last close")
+
+
+@test
+def test_close_waits_for_in_flight_open():
+    """A close ordered after an open must not return before that open publishes."""
+    with tempfile.TemporaryDirectory() as td, McpClient() as c:
+        binary = make_bin(td, "gated-close.bin")
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            opening = pool.submit(c.call, "open_file", path=str(binary), session="same")
+            check(wait_until(lambda: Path(str(binary) + ".starting").exists()), "worker never started")
+            closing = pool.submit(c.call, "close_session", session="same")
+            time.sleep(0.1)
+            Path(str(binary) + ".release").touch()
+            check(not err_of(opening.result(timeout=10)), "open failed")
+            check(closing.result(timeout=10) == {"closed": True}, "close failed")
+        check(c.call("list_instances") == [], "open resurrected a closed session")
+        check(err_of(c.call("get_info", session="same")), "closed session still routes")
+
+
+@test
+def test_shutdown_cancels_in_flight_open():
+    """SIGTERM also cleans a worker that has not reached the slot registry yet."""
+    if os.name == "nt":
+        return  # Windows CI has no Unix SIGTERM handler.
+    before = mock_worker_pids()
+    with tempfile.TemporaryDirectory() as td, McpClient() as c:
+        binary = make_bin(td, "gated-shutdown.bin")
+        c._send({"jsonrpc": "2.0", "id": 10000, "method": "tools/call",
+                 "params": {"name": "open_file", "arguments": {"path": str(binary), "session": "opening"}}})
+        marker = Path(str(binary) + ".starting")
+        check(wait_until(marker.exists), "worker never started")
+        private_dir = Path(marker.read_text())
+        c.proc.send_signal(signal.SIGTERM)
+        try:
+            c.proc.wait(timeout=5)
+            check(wait_until(lambda: mock_worker_pids() <= before), "startup worker survived shutdown")
+            check(not private_dir.exists(), f"startup directory survived shutdown: {private_dir}")
+        finally:
+            # A failing baseline must not leave the gated fixture alive.
+            Path(str(binary) + ".release").touch()
+
+@test
 def test_mixed_high_concurrency_workload():
     """Many workers, many interleaved requests — no deadlock, no reply crossing."""
     with tempfile.TemporaryDirectory() as td, McpClient(IDA_MCP_MAX_SLOTS=8) as c:
@@ -697,6 +757,37 @@ def test_parallel_close_of_shared_worker():
 
         check(all(not err_of(r) for r in closes), f"a concurrent close failed: {closes}")
         check(c.call("list_instances") == [], "shared worker outlived its last session")
+
+
+@test
+def test_last_close_racing_new_attachment_keeps_session_alive():
+    """The new session either shares the old worker or opens after its teardown."""
+    with tempfile.TemporaryDirectory() as td, McpClient(IDA_MCP_MAX_SLOTS=1) as c:
+        binary = make_bin(td, "reattach.bin")
+        current = "attach0"
+        c.call("open_file", path=str(binary), session=current)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            for i in range(1, 31):
+                barrier = threading.Barrier(2)
+                following = f"attach{i}"
+
+                def close():
+                    barrier.wait()
+                    return c.call("close_session", session=current)
+
+                def attach():
+                    barrier.wait()
+                    return c.call("open_file", path=str(binary), session=following)
+
+                closing, opening = pool.submit(close), pool.submit(attach)
+                check(not err_of(closing.result(timeout=10)), "close failed")
+                check(not err_of(opening.result(timeout=10)), "new attachment failed")
+                info = c.call("get_info", session=following)
+                check(not err_of(info) and info.get("path") == str(binary), f"new session was stopped: {info}")
+                check(len(c.call("list_instances")) == 1, "reattachment leaked a slot")
+                current = following
+        c.call("close_session", session=current)
+        check(c.call("list_instances") == [], "last reattached session leaked a worker")
 
 
 @test
@@ -954,7 +1045,147 @@ def test_route_timeout_for_wait_analysis():
         check("11s" in msg, f"timeout error should quote the effective bound: {msg}")
 
 
+@test
+def test_queue_backpressure_is_inside_request_timeout():
+    """A full stdin queue cannot extend a request's ten-second deadline."""
+    with tempfile.TemporaryDirectory() as td, McpClient() as c:
+        binary = make_bin(td, "slowwait-backpressure.bin")
+        c.call("open_file", path=str(binary), session="queue")
+
+        def send(mid, tool, arguments):
+            c._send({"jsonrpc": "2.0", "id": mid, "method": "tools/call",
+                     "params": {"name": tool, "arguments": arguments}})
+
+        send(10000, "wait_analysis", {"session": "queue", "max_seconds": 0})
+        check(wait_until(lambda: Path(str(binary) + ".waiting").exists()), "worker never blocked")
+        # Fill both the OS pipe and the bounded 64-command writer queue.
+        for i in range(80):
+            send(10100 + i, "set_comment", {"session": "queue", "ea": "0x401000", "comment": "x" * 131072})
+        time.sleep(0.2)
+        started = time.monotonic()
+        try:
+            response = c.call("wait_analysis", session="queue", max_seconds=0, _timeout=12)
+            elapsed = time.monotonic() - started
+            check("timeout" in (err_of(response) or "").lower(), f"missing bounded timeout: {response}")
+            check(elapsed < 11.5, f"queue admission extended the deadline to {elapsed:.2f}s")
+        finally:
+            c.call("close_session", session="queue", _timeout=10)
+
+
 # ---- 6. batch_convert ----
+
+@test
+def test_batch_output_collisions_are_rejected():
+    """Same basenames fail before work starts; neither result claims lost output."""
+    with tempfile.TemporaryDirectory() as td, McpClient() as c:
+        root = Path(td)
+        for name in ("a", "b"):
+            (root / name).mkdir()
+        files = [make_bin(root / name, "same.bin") for name in ("a", "b")]
+        out = root / "out"
+        result = c.call("batch_convert", paths=[str(p) for p in files], output_dir=str(out), concurrency=2)
+        check(result["completed"] == 0 and result["failed"] == 2, f"collisions were accepted: {result}")
+        check(all("collision" in r["error"].lower() for r in result["results"]), f"unclear errors: {result}")
+        check(list(out.iterdir()) == [], "collision preflight wrote files")
+        check(c.call("list_instances") == [], "collision preflight created workers")
+
+
+@test
+def test_batch_duplicate_paths_keep_results_and_unique_outputs():
+    """Relative aliases collide too; unrelated entries still convert in order."""
+    with tempfile.TemporaryDirectory() as td, McpClient() as c:
+        first, good = [make_bin(td, name) for name in ("duplicate.bin", "good.bin")]
+        alias = str(first.parent) + "/./" + first.name
+        paths = [str(first), alias, str(good)]
+        result = c.call("batch_convert", paths=paths, concurrency=3)
+        check([r["source"] for r in result["results"]] == paths, "input results were lost or reordered")
+        check(result["completed"] == 1 and result["failed"] == 2, f"duplicate destinations accepted: {result}")
+        check(not Path(str(first) + ".i64").exists(), "colliding output was written")
+        check(Path(str(good) + ".i64").is_file(), "unrelated output missing")
+
+
+@test
+def test_batch_preserves_existing_outputs():
+    """A batch must not replace an existing database or follow its symlink."""
+    with tempfile.TemporaryDirectory() as td, McpClient() as c:
+        binary = make_bin(td, "existing.bin")
+        target = Path(str(binary) + ".i64")
+        sentinel = b"existing user database\n"
+        target.write_bytes(sentinel)
+        result = c.call("batch_convert", paths=[str(binary)])
+        check(result["failed"] == 1, f"existing target accepted: {result}")
+        check(target.read_bytes() == sentinel, "existing database was overwritten")
+        target.unlink()
+        if os.name != "nt":
+            target.symlink_to(Path(td) / "missing-user-database")
+            result = c.call("batch_convert", paths=[str(binary)])
+            check(result["failed"] == 1 and target.is_symlink(), "dangling output symlink was replaced")
+
+
+@test
+def test_batch_preserves_output_created_after_preflight():
+    """Publication must atomically refuse a target created during analysis."""
+    with tempfile.TemporaryDirectory() as td, McpClient() as c:
+        binary = make_bin(td, "gated-publish.bin")
+        out = Path(td) / "out"
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            converting = pool.submit(c.call, "batch_convert", paths=[str(binary)], output_dir=str(out))
+            check(wait_until(lambda: Path(str(binary) + ".starting").exists()), "worker never started")
+            target = out / (binary.name + ".i64")
+            target.write_bytes(b"created during analysis")
+            Path(str(binary) + ".release").touch()
+            result = converting.result(timeout=10)
+        check(result["failed"] == 1, f"racing output was replaced: {result}")
+        check(target.read_bytes() == b"created during analysis", "late-created output was overwritten")
+        check(list(out.iterdir()) == [target], "staging output leaked")
+        check(c.call("list_instances") == [], "failed publication leaked a worker")
+
+
+@test
+def test_parallel_batches_cannot_overwrite_each_other():
+    """Two batches publishing one destination have exactly one successful writer."""
+    with tempfile.TemporaryDirectory() as td, McpClient() as c:
+        root = Path(td)
+        for name in ("a", "b"):
+            (root / name).mkdir()
+        files = [make_bin(root / name, "gated-shared.bin") for name in ("a", "b")]
+        out = root / "out"
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            tasks = [pool.submit(c.call, "batch_convert", paths=[str(path)], output_dir=str(out)) for path in files]
+            for path in files:
+                check(wait_until(lambda p=path: Path(str(p) + ".starting").exists()), "worker never started")
+            for path in files:
+                Path(str(path) + ".release").touch()
+            results = [task.result(timeout=10) for task in tasks]
+        check(sum(r["completed"] for r in results) == 1, f"multiple writers claimed the same output: {results}")
+        check(sum(r["failed"] for r in results) == 1, f"missing collision error: {results}")
+        check(len(list(out.iterdir())) == 1, "publication left staging files")
+        check(c.call("list_instances") == [], "parallel batches leaked workers")
+
+
+@test
+def test_shutdown_removes_batch_staging():
+    """A signal during batch startup removes both private and staged databases."""
+    if os.name == "nt":
+        return
+    before = mock_worker_pids()
+    with tempfile.TemporaryDirectory() as td, McpClient() as c:
+        binary = make_bin(td, "gated-batch-shutdown.bin")
+        out = Path(td) / "out"
+        c._send({"jsonrpc": "2.0", "id": 10000, "method": "tools/call",
+                 "params": {"name": "batch_convert", "arguments": {"paths": [str(binary)], "output_dir": str(out)}}})
+        marker = Path(str(binary) + ".starting")
+        check(wait_until(marker.exists), "batch worker never started")
+        private_dir = Path(marker.read_text())
+        check(any(out.iterdir()), "batch did not create staging")
+        c.proc.send_signal(signal.SIGTERM)
+        try:
+            c.proc.wait(timeout=5)
+            check(wait_until(lambda: mock_worker_pids() <= before), "batch worker survived shutdown")
+            check(not private_dir.exists(), "private batch directory survived shutdown")
+            check(list(out.iterdir()) == [], "staged batch directory survived shutdown")
+        finally:
+            Path(str(binary) + ".release").touch()
 
 @test
 def test_batch_convert():

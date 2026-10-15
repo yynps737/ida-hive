@@ -1,12 +1,27 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::Path;
 use std::sync::Arc;
 use anyhow::{anyhow, Result};
-use tokio::sync::{Mutex, RwLock, Semaphore};
+use tokio::sync::{watch, Mutex, RwLock, Semaphore};
 use tokio::time::Duration;
 use tracing::{info, warn};
 
 use crate::slot::Slot;
+use crate::batch::{plan_outputs, OutputPlan, StagedOutput};
+use crate::paths::worker_path;
+
+#[derive(Default)]
+struct KeyedLocks(Mutex<HashMap<String, Arc<Mutex<()>>>>);
+
+impl KeyedLocks {
+    async fn get(&self, key: &str) -> Arc<Mutex<()>> {
+        let mut map = self.0.lock().await;
+        map.retain(|_, v| Arc::strong_count(v) > 1);
+        map.entry(key.to_string())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    }
+}
 
 pub struct CoordinatorConfig {
     pub worker_exe: String,
@@ -34,9 +49,16 @@ pub struct Coordinator {
     /// Keyed by canonical path, so opens of the same binary serialize into one
     /// worker while opens of different binaries stay parallel. A global lock would
     /// stall the whole pool behind one large binary's analysis.
-    path_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    path_locks: KeyedLocks,
+    /// Always acquired before a path lock, including in `close_session`. The
+    /// session's check, startup and publication form one operation.
+    session_locks: KeyedLocks,
+    /// Shutdown cancels in-flight opens before taking exclusive lifecycle access,
+    /// so even a worker hung during startup is cleaned without waiting ten minutes.
+    lifecycle: RwLock<()>,
+    shutting_down: watch::Sender<bool>,
     /// One permit per slot, taken before a worker is spawned and released when it is
-    /// dropped. Counting `slots` instead would leave a window between the check and
+    /// stopped or dropped. Counting `slots` instead would leave a window between the check and
     /// the push — `start()` is slow, so concurrent opens of *different* paths would all
     /// see room and overshoot `max_slots` together.
     capacity: Arc<Semaphore>,
@@ -49,7 +71,10 @@ impl Coordinator {
             config,
             sessions: RwLock::new(HashMap::new()),
             slots: RwLock::new(Vec::new()),
-            path_locks: Mutex::new(HashMap::new()),
+            path_locks: KeyedLocks::default(),
+            session_locks: KeyedLocks::default(),
+            lifecycle: RwLock::new(()),
+            shutting_down: watch::channel(false).0,
             capacity,
         }
     }
@@ -59,35 +84,31 @@ impl Coordinator {
         self.config.max_slots
     }
 
-    /// Interns the lock for a path. Entries held only by the map are dropped first,
-    /// which bounds it to the opens currently in flight.
-    async fn lock_for_path(&self, path: &str) -> Arc<Mutex<()>> {
-        let mut map = self.path_locks.lock().await;
-        map.retain(|_, v| Arc::strong_count(v) > 1);
-        map.entry(path.to_string())
-            .or_insert_with(|| Arc::new(Mutex::new(())))
-            .clone()
-    }
-
     /// Returns the session's slot, an existing slot for the path, or a new one.
     pub async fn open(&self, path: &str, session_id: &str) -> Result<Arc<Slot>> {
+        let _lifecycle = self.lifecycle.read().await;
+        let mut shutdown = self.shutting_down.subscribe();
+        if *shutdown.borrow() {
+            return Err(anyhow!("Coordinator is shutting down"));
+        }
+        tokio::select! {
+            biased;
+            _ = shutdown.changed() => Err(anyhow!("Coordinator is shutting down")),
+            result = self.open_inner(path, session_id) => result,
+        }
+    }
+
+    async fn open_inner(&self, path: &str, session_id: &str) -> Result<Arc<Slot>> {
+        let slock = self.session_locks.get(session_id).await;
+        let _sguard = slock.lock().await;
         // Collapses relative paths, "./x" and symlinks onto one worker, and hands
         // the worker an absolute path to save against. An unresolvable path is
         // passed through so the worker reports the real open error.
-        let canonical = std::fs::canonicalize(path).map_or_else(|_| path.to_string(), |p| p.to_string_lossy().into_owned());
-        // On Windows canonicalize returns a verbatim \\?\ path. The idalib worker
-        // reads files through the MSVC CRT, whose fopen rejects that prefix, so
-        // open_database fails with ENOENT. Strip it for drive and UNC forms.
-        let canonical = if let Some(rest) = canonical.strip_prefix(r"\\?\UNC\") {
-            format!(r"\\{rest}")
-        } else if let Some(rest) = canonical.strip_prefix(r"\\?\") {
-            rest.to_string()
-        } else {
-            canonical
-        };
+        let canonical = std::fs::canonicalize(path)
+            .map_or_else(|_| worker_path(Path::new(path)), |path| worker_path(&path));
         let path = canonical.as_str();
 
-        let plock = self.lock_for_path(path).await;
+        let plock = self.path_locks.get(path).await;
         let _pguard = plock.lock().await;
 
         // Self-terminated workers are reaped here and in close_session only. Left
@@ -139,7 +160,7 @@ impl Coordinator {
         }
 
         // Taken before the spawn and moved into the slot, so the seat is held for the
-        // worker's whole life and returned by Slot::drop.
+        // worker's whole life and returned by stop() or Slot::drop.
         let permit = match Arc::clone(&self.capacity).try_acquire_owned() {
             Ok(p) => p,
             Err(_) => {
@@ -156,8 +177,14 @@ impl Coordinator {
         slot.start(&self.config.worker_exe, self.config.open_timeout).await?;
         slot.hold_permit(permit).await;
 
-        self.slots.write().await.push(Arc::clone(&slot));
-        self.sessions.write().await.insert(session_id.to_string(), Arc::clone(&slot));
+        // Publish both registries without an await between their mutations. A
+        // cancelled open can therefore never leave a slot without a session.
+        {
+            let mut slots = self.slots.write().await;
+            let mut sessions = self.sessions.write().await;
+            slots.push(Arc::clone(&slot));
+            sessions.insert(session_id.to_string(), Arc::clone(&slot));
+        }
 
         info!(slot = %slot_id, path = %path, session = %session_id, "New slot created");
 
@@ -229,6 +256,20 @@ impl Coordinator {
 
     /// Unmaps the session, stopping its worker only once nothing else references it.
     pub async fn close_session(&self, session_id: &str) -> Result<()> {
+        let _lifecycle = self.lifecycle.read().await;
+        self.close_session_inner(session_id).await
+    }
+
+    async fn close_session_inner(&self, session_id: &str) -> Result<()> {
+        let slock = self.session_locks.get(session_id).await;
+        let _sguard = slock.lock().await;
+        let slot = self.sessions.read().await.get(session_id).cloned();
+        let Some(slot) = slot else { return Ok(()); };
+        // A different session may be attaching to this same worker. Hold its path
+        // lock through the last-reference check and stop, so it cannot attach to
+        // a worker selected for teardown.
+        let plock = self.path_locks.get(&slot.path).await;
+        let _pguard = plock.lock().await;
         let slot_to_stop = {
             let mut sessions = self.sessions.write().await;
             match sessions.remove(session_id) {
@@ -255,6 +296,8 @@ impl Coordinator {
     /// otherwise strand a database — gigabytes of it for a large binary, on a `/tmp`
     /// that is a RAM disk on most systems.
     pub async fn shutdown(&self) {
+        self.shutting_down.send_replace(true);
+        let _lifecycle = self.lifecycle.write().await;
         let slots = {
             let mut guard = self.slots.write().await;
             self.sessions.write().await.clear();
@@ -281,13 +324,14 @@ impl Coordinator {
         info!(total, concurrency, "Starting batch convert");
 
         let semaphore = Arc::new(Semaphore::new(concurrency));
+        let outputs = plan_outputs(&paths, output_dir.as_deref());
 
         let mut handles = Vec::with_capacity(total);
 
-        for (idx, path) in paths.into_iter().enumerate() {
+        for (idx, (path, output)) in paths.into_iter().zip(outputs).enumerate() {
             let sem = Arc::clone(&semaphore);
             let coord = Arc::clone(self);
-            let out_dir = output_dir.clone();
+            let source = path.clone();
 
             let handle = tokio::spawn(async move {
                 let _permit = sem.acquire().await.unwrap();
@@ -295,8 +339,8 @@ impl Coordinator {
                 let session_id = format!("__batch_{}_{}", idx, uuid::Uuid::new_v4());
                 let start = std::time::Instant::now();
 
-                let result = Self::convert_single(
-                    &coord, &path, &session_id, out_dir.as_deref(), max_analysis_seconds,
+                let result = coord.convert_and_publish(
+                    &path, &session_id, output, max_analysis_seconds,
                 ).await;
 
                 let elapsed = start.elapsed().as_secs_f64();
@@ -315,46 +359,69 @@ impl Coordinator {
                     }
                     Err(e) => {
                         warn!(idx, path = %path, error = %e, "Convert failed");
-                        ConvertResult {
-                            source: path,
-                            i64_path: None,
-                            functions: None,
-                            segments: None,
-                            elapsed,
-                            error: Some(e.to_string()),
-                        }
+                        ConvertResult::failed(path, elapsed, e)
                     }
                 };
-
-                // Runs on the failure path too, so a bad file frees its slot.
-                let _ = coord.close_session(&session_id).await;
 
                 (idx, convert_result)
             });
 
-            handles.push(handle);
+            handles.push((idx, source, handle));
         }
 
         // Tasks finish out of order, so the index carried through restores it.
         let mut collected: Vec<(usize, ConvertResult)> = Vec::with_capacity(total);
-        for handle in handles {
-            if let Ok(pair) = handle.await {
-                collected.push(pair);
-            }
+        for (idx, source, handle) in handles {
+            let pair = match handle.await {
+                Ok(pair) => pair,
+                Err(e) => (idx, ConvertResult::failed(source, 0.0, e)),
+            };
+            collected.push(pair);
         }
         collected.sort_by_key(|(idx, _)| *idx);
         collected.into_iter().map(|(_, r)| r).collect()
     }
 
-    /// open → `wait_analysis` → `save_idb`, returning the .i64 path and its counts.
+    async fn convert_and_publish(
+        self: &Arc<Self>,
+        path: &str,
+        session_id: &str,
+        output: Result<OutputPlan>,
+        max_analysis_seconds: i64,
+    ) -> Result<(String, u64, u64)> {
+        // Keep staging cleanup within shutdown's lifecycle barrier too. The watch
+        // cancels a blocked conversion before shutdown waits for this guard.
+        let _lifecycle = self.lifecycle.read().await;
+        let mut shutdown = self.shutting_down.subscribe();
+        if *shutdown.borrow() {
+            return Err(anyhow!("Coordinator is shutting down"));
+        }
+        let convert = async {
+            let staged = output?.stage()?;
+            let result = Self::convert_single(self, path, session_id, &staged, max_analysis_seconds).await;
+            // Close on success and failure before releasing staging. Publication
+            // only happens after a confirmed save and never replaces an output.
+            let closed = self.close_session_inner(session_id).await;
+            let (functions, segments) = result?;
+            closed?;
+            staged.publish().map(|path| (path, functions, segments))
+        };
+        tokio::select! {
+            biased;
+            _ = shutdown.changed() => Err(anyhow!("Coordinator is shutting down")),
+            result = convert => result,
+        }
+    }
+
+    /// open → `wait_analysis` → `save_idb`, under the batch lifecycle guard.
     async fn convert_single(
         coord: &Arc<Self>,
         path: &str,
         session_id: &str,
-        output_dir: Option<&str>,
+        output: &StagedOutput,
         max_analysis_seconds: i64,
-    ) -> Result<(String, u64, u64)> {
-        coord.open(path, session_id).await?;
+    ) -> Result<(u64, u64)> {
+        coord.open_inner(path, session_id).await?;
 
         let wait_params = serde_json::json!({"max_seconds": max_analysis_seconds});
         let wait_result = coord.route(session_id, "wait_analysis", wait_params).await?;
@@ -364,29 +431,20 @@ impl Coordinator {
             return Err(anyhow!("Analysis timed out after {max_analysis_seconds}s"));
         }
 
-        let output_path = if let Some(dir) = output_dir {
-            let filename = PathBuf::from(path)
-                .file_name().map_or_else(|| "unknown".to_string(), |f| f.to_string_lossy().to_string());
-            let mut out = PathBuf::from(dir);
-            out.push(format!("{filename}.i64"));
-            out.to_string_lossy().to_string()
-        } else {
-            // Suffixed, not replaced: xxx.dll → xxx.dll.i64
-            format!("{path}.i64")
-        };
-
-        let save_params = serde_json::json!({"output_path": output_path});
+        let save_params = serde_json::json!({"output_path": output.worker_path()});
         let save_result = coord.route(session_id, "save_idb", save_params).await?;
 
         let success = save_result.get("success").and_then(serde_json::Value::as_bool).unwrap_or(false);
         if !success {
-            return Err(anyhow!("save_idb failed for {path}"));
+            let detail = save_result.get("error").and_then(serde_json::Value::as_str)
+                .unwrap_or("worker did not report a reason");
+            return Err(anyhow!("save_idb failed for {path}: {detail}"));
         }
 
         let func_count = wait_result.get("functions").and_then(serde_json::Value::as_u64).unwrap_or(0);
         let seg_count = wait_result.get("segments").and_then(serde_json::Value::as_u64).unwrap_or(0);
 
-        Ok((output_path, func_count, seg_count))
+        Ok((func_count, seg_count))
     }
 }
 
@@ -398,6 +456,12 @@ pub struct ConvertResult {
     pub segments: Option<u64>,
     pub elapsed: f64,
     pub error: Option<String>,
+}
+
+impl ConvertResult {
+    fn failed(source: String, elapsed: f64, error: impl std::fmt::Display) -> Self {
+        Self { source, i64_path: None, functions: None, segments: None, elapsed, error: Some(error.to_string()) }
+    }
 }
 
 #[derive(Debug, serde::Serialize)]

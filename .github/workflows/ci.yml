@@ -56,6 +56,9 @@ jobs:
       - name: Lints
         run: cargo clippy --release --all-targets --locked
 
+      - name: Deadline and transport unit tests
+        run: cargo test --release --locked
+
   worker:
     name: C++ worker against IDA ${{ matrix.sdk.version }} SDK
     runs-on: ubuntu-latest
@@ -162,6 +165,9 @@ jobs:
 
       - name: Build
         run: cargo build --release --locked --target x86_64-pc-windows-msvc
+
+      - name: Deadline and transport unit tests
+        run: cargo test --release --locked --target x86_64-pc-windows-msvc
 
   coordinator:
     name: Coordinator suite (mock worker)

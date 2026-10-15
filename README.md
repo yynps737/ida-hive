@@ -67,10 +67,23 @@ Claude / Codex / any MCP client
   worker**. That worker holds **one mutable database**: a `rename`/`set_comment`/`set_type` in
   session A is visible in session B. Different files open concurrently; opening one large binary
   does not stall opens of others.
+- **Session lifecycle.** Opens and closes of a given session are serialized. Racing opens of
+  different files cannot replace its mapping, and a close waits for an earlier open. Attaching
+  another session to a shared worker is synchronized with its last close.
 - **Lifecycle.** `close_session` stops a worker only once no other session still references it.
   Workers that die on their own are reaped and their temp directories removed. `kill_on_drop` plus a
   `Drop` cleanup remove temp directories on normal shutdown (a hard `SIGKILL` of the coordinator can
   still orphan workers — see Limitations).
+- **Request deadlines.** The response deadline includes queue admission and stdin writes.
+  Cancelled or expired commands still in the writer queue are discarded. Work already sent to
+  IDA may complete after a caller times out; its edits cannot be rolled back. If a pipe write
+  stalls mid-command, the worker is stopped so later requests cannot corrupt the protocol.
+- **Batch outputs.** `batch_convert` rejects all entries with the same resolved destination and
+  preserves existing files (including symlinks). Each successful save is staged beside its target
+  and published atomically without replacement, so concurrent batches/server processes cannot
+  overwrite one another. This requires hard-link support (e.g. APFS, ext4, NTFS); a filesystem
+  without it returns a per-file error. Use separate output directories for inputs with identical
+  basenames. Explicit `save_idb` calls retain their replacement behavior.
 
 ## Analysis model (important)
 

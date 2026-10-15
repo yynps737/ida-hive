@@ -146,6 +146,8 @@ class Worker:
 
     def m_wait_analysis(self, _p):
         if self.slow_wait:
+            with open(self.path + ".waiting", "w") as fh:
+                fh.write("waiting")
             time.sleep(60)
         return {"done": True, "functions": self.functions, "segments": self.segments, "elapsed": 0.0}
 
@@ -235,6 +237,16 @@ def main():
         return 1
 
     worker = Worker(path, db_dir)
+    # Let lifecycle tests hold startup at a known point, rather than relying on
+    # thread scheduling to race an open against another open/close/shutdown.
+    if "gated" in name:
+        with open(path + ".starting", "w") as fh:
+            fh.write(db_dir)
+        deadline = time.monotonic() + 20
+        while not os.path.exists(path + ".release"):
+            if time.monotonic() >= deadline:
+                return 1
+            time.sleep(0.01)
     # Fidelity: the real CommandDispatcher::run is single-threaded and serial.
     # Only opt into concurrent dispatch when the file name asks for it.
     concurrent = "concurrent" in name

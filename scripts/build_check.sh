@@ -45,12 +45,18 @@ fi
 
 # The lint policy lives in Cargo.toml at deny level, but only clippy evaluates the
 # clippy lints — a plain build passes regardless, so this step is what enforces them.
-step "2/10  Rust lints (cargo clippy, warnings denied)"
+step "2/10  Rust lints and deadline/transport unit tests"
 if cargo clippy --release --all-targets >/tmp/ida_hive_clippy.log 2>&1; then
     ok "no lint findings"
 else
     bad "clippy reported findings — see /tmp/ida_hive_clippy.log"
     grep -E "^error" /tmp/ida_hive_clippy.log | head -10
+fi
+if cargo test --release --locked >/tmp/ida_hive_rust_tests.log 2>&1; then
+    echo "  $(grep '^test result:' /tmp/ida_hive_rust_tests.log)"
+else
+    bad "Rust unit tests failed — see /tmp/ida_hive_rust_tests.log"
+    tail -25 /tmp/ida_hive_rust_tests.log
 fi
 
 if [ "${SKIP_WORKER:-0}" != "1" ]; then

@@ -248,6 +248,33 @@ def test_shared_binary_one_process(server, worker, ida, binary, failures):
         c.close()
 
 
+def test_conflicting_session_opens(server, worker, ida, binaries, failures):
+    """Two real startups racing for one session must leave one mapped worker."""
+    c = Client(server, worker, ida, IDA_MCP_MAX_SLOTS=4)
+    try:
+        barrier = threading.Barrier(2)
+
+        def opening(path):
+            barrier.wait()
+            return c.call("open_file", timeout=OPEN_TIMEOUT, path=str(path), session="same")
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(opening, binaries[:2]))
+        opened = [r for r in results if not err(r)]
+        rejected = [r for r in results if err(r)]
+        check(len(opened) == 1 and len(rejected) == 1,
+              f"conflicting session opens were not atomic: {results}", failures)
+        instances = c.call("list_instances")
+        check(isinstance(instances, list) and len(instances) == 1,
+              f"conflicting session opens leaked slots: {instances}", failures)
+        check(len(worker_pids(c.proc.pid)) == 1, "conflicting session opens leaked a process", failures)
+        c.call("close_session", session="same")
+        check(not worker_pids(c.proc.pid), "conflicting session's last close left a process", failures)
+        print("    conflicting session opens: one admitted, one rejected, no orphan worker")
+    finally:
+        c.close()
+
+
 def test_slot_cap_with_real_workers(server, worker, ida, binaries, failures):
     """The cap must hold when start() really takes seconds."""
     cap = 2
@@ -294,6 +321,7 @@ def test_batch_convert_real(server, worker, ida, binaries, failures, tmpdir):
                   f"result {i} is for {r.get('source')}, expected {b}", failures)
 
         done = [r for r in results if r.get("error") is None]
+        check(len(done) == len(binaries), f"batch conversion failed: {results}", failures)
         check(result.get("completed") == len(done),
               f"completed={result.get('completed')} but {len(done)} entries lack an error",
               failures)
@@ -305,6 +333,17 @@ def test_batch_convert_real(server, worker, ida, binaries, failures, tmpdir):
                 continue
             check(Path(out).stat().st_size > 1024,
                   f"suspiciously small database: {out}", failures)
+            # Reopen the published artifact after staging has been removed. A
+            # reported success must be an independently usable IDA database.
+            reopened = c.call("open_file", timeout=OPEN_TIMEOUT, path=out, session="verify")
+            check(not err(reopened), f"published database cannot reopen: {reopened}", failures)
+            if not err(reopened):
+                info = c.call("get_info", session="verify")
+                check(info.get("func_count") == r.get("functions"),
+                      f"published database lost analysis results: {info}, {r}", failures)
+            c.call("close_session", session="verify")
+
+        check(not list(Path(tmpdir).glob(".ida-hive-output-*")), "staging directories leaked", failures)
 
         print(f"    converted {len(done)}/{len(binaries)} in {elapsed:.0f}s, "
               f"{result.get('total_functions', 0)} functions total")
@@ -343,6 +382,8 @@ def test_batch_concurrency_exceeds_slots(server, worker, ida, binaries, failures
         completed = result.get("completed", 0)
         check(completed + len(failed) == len(binaries),
               f"completed({completed}) + failed({len(failed)}) != {len(binaries)}", failures)
+        check(completed > 0 and len(failed) > 0,
+              f"contended batch did not exercise admission: {result}", failures)
         print(f"    max_slots=1 vs concurrency=4: {completed} converted, "
               f"{len(failed)} reported an error, none lost")
         check(not worker_pids(c.proc.pid),
@@ -383,6 +424,8 @@ def main():
     test_concurrent_distinct_binaries(args.server, args.worker, args.ida, binaries[:3], failures)
     print("  shared binary, refcounted teardown")
     test_shared_binary_one_process(args.server, args.worker, args.ida, binaries[0], failures)
+    print("  conflicting opens of one session")
+    test_conflicting_session_opens(args.server, args.worker, args.ida, binaries, failures)
     print("  slot cap with real workers")
     test_slot_cap_with_real_workers(args.server, args.worker, args.ida, binaries, failures)
 
@@ -391,7 +434,7 @@ def main():
         test_batch_convert_real(args.server, args.worker, args.ida, binaries[:3], failures, Path(td))
         print("  batch concurrency exceeding max_slots")
         test_batch_concurrency_exceeds_slots(args.server, args.worker, args.ida,
-                                             binaries[:3], failures, Path(td))
+                                             binaries[:3], failures, Path(td) / "contended")
 
     elapsed = time.time() - started
     print()

@@ -1,4 +1,6 @@
+mod batch;
 mod coordinator;
+mod paths;
 mod protocol;
 mod slot;
 mod tools;
